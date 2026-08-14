@@ -151,6 +151,13 @@ unattended the first few times you try something new — a few of the commands
 in this repo were only understood by watching what physically happened when
 we sent them, sometimes not what we expected.
 
+## Support
+
+This is free, and the goal is to save the next person the hours we spent
+here. If it saved you some and you'd like to say thanks:
+[paypal.me/pakostatomas](https://paypal.me/pakostatomas) — entirely
+optional, never expected.
+
 ## License
 
 GPL-3.0 — see [`LICENSE`](LICENSE). Chosen to match the projects in
