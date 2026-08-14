@@ -268,25 +268,40 @@ different physical printer, which is exactly why this was worth measuring
 directly rather than assuming. Retreating and re-approaching that position
 purely via `G1` commands reliably re-triggers the lever every time.
 
-The plan from here:
+Also now in place, all **drafts pending supervised testing at the
+printer** (none run even once yet, clearly marked as such in each file):
 
-1. Build a proper cut macro around the confirmed position: pre-retraction,
-   multiple passes, safe travel back afterward, temporary acceleration
-   limits during the cut — see
-   [`FrederickAlt`'s cutter reference docs](https://github.com/FrederickAlt/CREALITY-K1-AND-K1-MAX-CFS-RETRUDE-BEFORE-CUT-MOD/blob/master/docs/unload-cutter-sensor-reference.md)
-   for the reference behavior to match. A first draft is in
-   [`macros/cut_macro_draft.cfg`](macros/cut_macro_draft.cfg) — **written,
-   not yet tested even once**, do not run it unsupervised.
-2. Wrap all of this into a real Klipper extra with proper gcode commands and
-   background state polling. A first draft exists at
-   [`klipper_extra/creality_cfs.py`](klipper_extra/creality_cfs.py) — the
-   protocol calls it makes are the validated ones from this repo, but the
-   Klipper integration itself (config parsing, gcode commands, the reactor
-   timer) hasn't been loaded into a real Klipper yet. See that folder's
-   README for status and how to test it safely.
+- [`klipper_extra/creality_cfs.py`](klipper_extra/creality_cfs.py) — a
+  real Klipper extra: `CFS_STATUS`/`CFS_RETRUDE`/`CFS_EXTRUDE` gcode
+  commands, a background status poll, and per-slot virtual
+  `filament_switch_sensor` objects so Fluidd/Mainsail show CFS material
+  presence natively. The protocol calls are the validated ones from this
+  repo; the Klipper integration itself hasn't been loaded into a real
+  Klipper yet.
+- [`macros/cut_macro_draft.cfg`](macros/cut_macro_draft.cfg) — a cut
+  sequence around the confirmed lever position (pre-retraction, multiple
+  passes, temporary acceleration limits), modeled on
+  [`FrederickAlt`'s cutter reference docs](https://github.com/FrederickAlt/CREALITY-K1-AND-K1-MAX-CFS-RETRUDE-BEFORE-CUT-MOD/blob/master/docs/unload-cutter-sensor-reference.md).
+- [`macros/toolchange_draft.cfg`](macros/toolchange_draft.cfg) — a first
+  `CFS_TOOLCHANGE` macro combining cut → retrude old → extrude new, based
+  on the real cut/retrude/load/flush/restore order documented in
+  [`FrederickAlt`'s material-change-flow.md](https://github.com/FrederickAlt/CREALITY-K1-AND-K1-MAX-CFS-RETRUDE-BEFORE-CUT-MOD/blob/master/docs/material-change-flow.md).
+  Deliberately does *not* include purge/flush yet — see
+  [`docs/TOOLCHANGE_TEST_PLAN.md`](docs/TOOLCHANGE_TEST_PLAN.md) for the
+  staged, supervised order to test these pieces in (individually first,
+  then as a manual sequence, only then as this macro).
+
+Once a full swap is confirmed working through that plan, wiring up
+`T0`-`T3` for actual slicer-driven multi-color printing is the step after
+— not attempted yet. See
+[Setting up your slicer](docs/TOOLCHANGE_TEST_PLAN.md) notes there for
+what's known to work on the OrcaSlicer side from prior work on different
+hardware (`manual_filament_change: 0`, sequential `T0..T3` → slot A..D
+mapping) once that point is reached.
 
 See [`docs/PROTOCOL.md`](docs/PROTOCOL.md) for what's documented about the
-cutter mechanism so far.
+cutter mechanism, and [`docs/MANUAL.md`](docs/MANUAL.md) for the full
+setup walkthrough.
 
 Contributions, corrections, and hardware validation on other CFS/board
 revisions are welcome — open an issue.
