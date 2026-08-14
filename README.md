@@ -197,6 +197,14 @@ your connection. From there:
 All scripts default to `/dev/ttyUSB0` — edit the `PORT` constant near the
 top of each file if yours enumerates differently.
 
+No hardware needed to check the framing/CRC logic itself — it's tested
+against real captured traffic:
+
+```bash
+pip install -r requirements-dev.txt
+pytest tests/ -v
+```
+
 ## Status / what's next
 
 This is **not** a Klipper extra (plugin) yet — it's a validated, working

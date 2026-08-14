@@ -41,3 +41,21 @@ CFS_STATUS
 
 Only move on to `CFS_RETRUDE SLOT=A` / `CFS_EXTRUDE SLOT=A` once that
 works and you're watching the printer.
+
+## Fluidd / Mainsail display
+
+You don't need a custom panel for this. The extra registers one small
+object per slot named `filament_switch_sensor CFS_A` (through `CFS_D`),
+matching the exact shape Klipper's built-in filament sensor uses
+(`filament_detected` + `enabled`). Fluidd and Mainsail already know how to
+display any object with that name pattern in their normal filament-sensor
+UI — so once this extra is loaded and polling, slots A–D should just show
+up there like any other runout sensor, updating live as material is
+loaded/unloaded. Change the `CFS_` prefix via `sensor_name_prefix:` in the
+config if you want different names.
+
+This part hasn't been visually confirmed in a real Fluidd session yet
+(same "written, not yet tested" caveat as the rest of this file) — the
+object shape and naming convention are correct per Klipper's own
+`filament_switch_sensor` implementation, but it's worth a quick look the
+first time you load this to confirm it renders as expected.

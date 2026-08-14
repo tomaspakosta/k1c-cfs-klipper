@@ -61,6 +61,22 @@ SLOT_BYTES = {"A": 0x01, "B": 0x02, "C": 0x04, "D": 0x08}
 BROADCAST_ALL_BOXES = 0xFE
 
 
+class CFSSlotSensor:
+    """A minimal object matching the shape of Klipper's built-in
+    filament_switch_sensor (filament_detected + enabled). Registered under
+    the name "filament_switch_sensor CFS_<slot>" so Fluidd/Mainsail pick it
+    up in their normal filament-sensor UI automatically - no custom
+    frontend needed. See klipper_extra/README.md for what this looks like.
+    """
+
+    def __init__(self):
+        self.filament_detected = False
+        self.enabled = True
+
+    def get_status(self, eventtime):
+        return {"filament_detected": self.filament_detected, "enabled": self.enabled}
+
+
 def crc8(data):
     crc = 0
     for byte in bytearray(data):
@@ -96,6 +112,18 @@ class CrealityCFS:
         self.ser = None
         self.addressed = False
         self.last_status = {}
+
+        # Register one virtual filament_switch_sensor per slot so Fluidd/
+        # Mainsail show CFS material presence in their normal filament
+        # sensor panel, without any custom frontend work. Sensor names are
+        # "filament_switch_sensor CFS_A".."CFS_D".
+        name_prefix = config.get("sensor_name_prefix", "CFS_")
+        self.slot_sensors = {}
+        for slot_letter in SLOT_BYTES:
+            sensor = CFSSlotSensor()
+            self.printer.add_object(
+                "filament_switch_sensor %s%s" % (name_prefix, slot_letter), sensor)
+            self.slot_sensors[slot_letter] = sensor
 
         self.printer.register_event_handler("klippy:connect", self._handle_connect)
         self.printer.register_event_handler("klippy:disconnect", self._handle_disconnect)
@@ -167,7 +195,10 @@ class CrealityCFS:
                 self.last_status["box_state"] = resp.hex() if resp else None
                 sensor = self._send(self.box_addr, 0xFF, FN["GET_FILAMENT_SENSOR_STATE"], bytes([0x00]))
                 if len(sensor) >= 6:
-                    self.last_status["material_bitmask"] = sensor[5]
+                    bitmask = sensor[5]
+                    self.last_status["material_bitmask"] = bitmask
+                    for slot_letter, slot_byte in SLOT_BYTES.items():
+                        self.slot_sensors[slot_letter].filament_detected = bool(bitmask & slot_byte)
             except Exception:
                 logging.exception("creality_cfs: poll failed")
         return eventtime + self.poll_interval
