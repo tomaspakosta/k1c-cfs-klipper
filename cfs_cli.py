@@ -115,6 +115,12 @@ def do_extrude(args):
             time.sleep(0.4)
         cfs.tighten_up(BOX_ADDR, enable=False)
         cfs.ctrl_connection_motor(BOX_ADDR, action=0x00)
+        # A completed EXTRUDE_PROCESS run can leave the box reporting a
+        # latched error status (seen live: EXTRUDE_ERR8) on GET_BOX_STATE
+        # even when the extrude itself succeeded (toolhead sensor
+        # confirmed). A fresh SET_BOX_MODE(IDLE) clears it - confirmed live
+        # on real hardware, see docs/PROTOCOL.md.
+        cfs.set_box_mode_idle(BOX_ADDR)
         print(f"EXTRUDE slot={slot_letter} complete ({args.polls} polls).")
 
 

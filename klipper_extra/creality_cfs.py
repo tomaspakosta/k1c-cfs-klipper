@@ -254,6 +254,11 @@ class CrealityCFS:
 
         self._send(self.box_addr, 0xFF, FN["TIGHTEN_UP_ENABLE"], bytes([0x00]))
         self._send(self.box_addr, 0xFF, FN["CTRL_CONNECTION_MOTOR_ACTION"], bytes([0x00]))
+        # A completed run can leave the box reporting a latched error status
+        # (seen live: EXTRUDE_ERR8 on GET_BOX_STATE) even when the extrude
+        # itself succeeded (toolhead sensor confirmed). A fresh
+        # SET_BOX_MODE(IDLE) clears it - confirmed live on real hardware.
+        self._send(self.box_addr, 0xFF, FN["SET_BOX_MODE"], bytes([0x00, 0x01]))
         gcmd.respond_info("CFS_EXTRUDE slot=%s complete (%d polls)" % (slot_letter, polls))
 
 

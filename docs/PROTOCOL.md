@@ -114,7 +114,10 @@ EXTRUDE_PROCESS         data=[slot, 0x05, 0x00]         (stage 5 — poll this r
                                                           "go further" command, just keep going.)
 TIGHTEN_UP_ENABLE       data=[0x00]                     (disable)
 CTRL_CONNECTION_MOTOR_ACTION  data=[0x00]                (ACTION=STOP — cleanup)
+SET_BOX_MODE            data=[0x00, 0x01]              (IDLE again — see note below)
 ```
+
+**Post-run cleanup gotcha (found live, after remounting via the upgrade kit):** a completed `EXTRUDE_PROCESS` run can leave the box reporting a latched error status on `GET_BOX_STATE` — we saw `status=0x0C` (`EXTRUDE_ERR8`) persist across repeated queries, with the box's LED visibly red, **even though the extrude had actually succeeded** (toolhead sensor confirmed `filament_detected: true`). Simply sending `SET_BOX_MODE` (IDLE) again cleared it immediately (`status` back to `0x00`, LED back to white). Interoperability note: `gitstonelabs/creality-cfs-klipper`'s own `BOX_ERROR_CLEAR` command doesn't send anything to the box at all — it only clears their host-side cached error flag — so this "re-send `SET_BOX_MODE`" fix is something we found empirically, not something documented elsewhere. All the example scripts and the Klipper extra now send this as a final cleanup step after extrude.
 
 **Confirmed while writing this doc, not just a lead:** the 4-byte "telemetry" data in stage-5 responses is a big-endian IEEE-754 float, exactly matching `MEASURING_WHEEL`'s documented format. Decoding our own captured sequence from the toolhead-reach test:
 

@@ -19,15 +19,16 @@ printer-extruder-side extrusion
 flush (purge old->new)
 ```
 
-## Phase 1 — re-confirm the individual pieces (all already validated once, before the upgrade kit remount)
+## Phase 1 — re-confirm the individual pieces ✅ DONE (2026-08-14, at the printer, post upgrade-kit remount)
 
 Each of these is a single command, watch the printer each time.
 
 1. **`python cfs_cli.py status`** — read-only, confirms the box responds
-   and reports which slots have material.
+   and reports which slots have material. ✅ box responded, UID/version
+   matched.
 2. **`python cfs_cli.py retrude --slot <X>`** — pick whichever slot
    currently has filament loaded. Confirms RETRUDE still works after the
-   remount.
+   remount. ✅ motor reeled in as expected.
 3. **One single cut pass**, *not* the full multi-pass macro yet — send
    just the two moves by hand to confirm the lever still triggers at the
    coordinates found earlier:
@@ -36,14 +37,39 @@ Each of these is a single command, watch the printer each time.
    G1 X150 Y225 F1500
    ```
    (adjust to your own measured coordinates if different from ours).
-   Confirm the lever presses, then retreat: `G1 Y200 F1500`.
+   Confirm the lever presses, then retreat: `G1 Y200 F1500`. ✅ lever
+   pressed/released reliably, reproducible with plain G-code.
 4. **`python cfs_cli.py extrude --slot <X>`** — same slot as step 2 or a
    fresh one, confirms EXTRUDE still reaches the toolhead sensor after the
    remount. Watch `filament_detected` in Fluidd/Moonraker if you have the
-   Klipper extra installed, or poll it manually.
+   Klipper extra installed, or poll it manually. ✅ material physically
+   reached the toolhead sensor, `filament_detected: true`, fully
+   automatic (no manual guidance needed this time, PTFE run was fully
+   connected).
 
-If all 4 pass, the individual pieces are confirmed working on the
-remounted hardware — move to phase 2.
+All 4 passed — the individual pieces are confirmed working on the
+remounted hardware.
+
+**Two real incidents hit during this run, both now understood and fixed:**
+
+- **Box went completely silent** (no reply even to read-only
+  `GET_BOX_STATE`) partway through. Cause: filament was physically loose
+  in slot A's feed gear — the sensor still reported "loaded" but there
+  was no real grip, so the feed mechanism jammed/faulted hard enough to
+  stop the box responding at all. Fix: physically re-seat the filament
+  so the feed gear has real resistance against it, then re-run discovery
+  (`discover()` + `assign_address()`) to restore comms — a plain retry
+  without physically fixing the filament will not help.
+- **After a successful EXTRUDE, `GET_BOX_STATE` stayed on `status=0x0C`
+  (`EXTRUDE_ERR8`), LED visibly red**, even though the extrude had
+  actually worked (filament confirmed at the toolhead sensor). This is a
+  latched status flag, not a real fault. Fix: resend `SET_BOX_MODE`
+  (IDLE) — clears it immediately. This is now done automatically at the
+  end of every extrude call in this repo (`cfs_cli.py`,
+  `examples/03_extrude.py`, `klipper_extra/creality_cfs.py`) — see
+  docs/PROTOCOL.md's "Post-run cleanup gotcha" for the full writeup.
+
+Move to phase 2.
 
 ## Phase 2 — manual end-to-end swap (no macro yet, just the sequence by hand)
 

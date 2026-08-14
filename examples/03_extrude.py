@@ -79,6 +79,11 @@ def main():
         print("\n=== TIGHTEN_UP_ENABLE off + CTRL_CONNECTION_MOTOR_ACTION STOP (cleanup) ===")
         cfs.tighten_up(BOX_ADDR, enable=False)
         cfs.ctrl_connection_motor(BOX_ADDR, action=0x00)
+        # A completed run can leave the box reporting a latched error status
+        # (seen live: EXTRUDE_ERR8 on GET_BOX_STATE) even when the extrude
+        # itself succeeded. A fresh SET_BOX_MODE(IDLE) clears it - confirmed
+        # live on real hardware.
+        cfs.set_box_mode_idle(BOX_ADDR)
 
         print("\nDone. If the odometer value above was changing between polls "
               "(not stuck on one number) and status stayed 0x00, the motor really ran. "

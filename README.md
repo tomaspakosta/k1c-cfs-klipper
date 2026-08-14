@@ -132,9 +132,10 @@ once we were confident in what we were sending.
 | ✅ | Reading status, firmware version, and filament sensors |
 | ✅ | Reading RFID data per slot *(most non-Creality-branded spools have no chip to read — expected, not a bug)* |
 | ✅ | **`RETRUDE`** — reeling filament back onto the spool |
-| ✅ | **`EXTRUDE`** — feeding filament from the spool, through the box, past the buffer, and (manually guided into the toolhead at the time, before the PTFE tube was connected) far enough to trigger Klipper's toolhead filament sensor — see the caveat in `docs/PROTOCOL.md` before assuming this was a fully automated feed |
-| ✅ | The cutter's lever-actuated cut position — found by hand, then **confirmed reproducible with plain `G1` moves**: retreat and return reliably re-triggers it, no manual guidance needed for *that* step |
-| ⏳ | A full cut *macro* (retraction, multiple passes, safe travel, acceleration handling around the confirmed position) and an *automatic* feed through the now-connected PTFE tube re-tested end-to-end without manual guidance — see [Status / what's next](#status--whats-next) |
+| ✅ | **`EXTRUDE`** — feeding filament from the spool, through the box, through the (now fully connected) PTFE tube, to the toolhead — **confirmed fully automatic**, no manual guidance, `filament_detected: true` in Klipper after re-testing post-upgrade-kit-remount |
+| ✅ | The cutter's lever-actuated cut position — found by hand, then **confirmed reproducible with plain `G1` moves**, including after the upgrade-kit remount: retreat and return reliably re-triggers it |
+| ✅ | Recovering from a post-run latched error status — a completed `EXTRUDE` can leave the box reporting an error on `GET_BOX_STATE` (LED visibly red) even though it actually succeeded; re-sending `SET_BOX_MODE` (IDLE) clears it, now done automatically at the end of every extrude call in this repo |
+| ⏳ | A full cut *macro* and the combined toolchange sequence — individual pieces are proven, [`docs/TOOLCHANGE_TEST_PLAN.md`](docs/TOOLCHANGE_TEST_PLAN.md) phase 1 is done, phases 2-4 (manual swap, then the macros) are next |
 
 ## How it fits together
 
