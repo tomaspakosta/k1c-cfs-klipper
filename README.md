@@ -26,6 +26,7 @@ Discovery · addressing · sensors · RFID · `RETRUDE` · `EXTRUDE`
 [What we found instead](#what-we-found-instead) ·
 [How it fits together](#how-it-fits-together) ·
 [Quick start](#quick-start) ·
+[Full manual](docs/MANUAL.md) ·
 [Status / what's next](#status--whats-next) ·
 [Credits](#credits) ·
 [Safety](#safety) ·
@@ -34,6 +35,9 @@ Discovery · addressing · sensors · RFID · `RETRUDE` · `EXTRUDE`
 If you're technical: jump straight to [`docs/PROTOCOL.md`](docs/PROTOCOL.md)
 for the full wire protocol, [`cfs_cli.py`](cfs_cli.py) for a ready-to-run
 tool, or [`examples/`](examples/) for annotated individual scripts.
+
+Setting this up on your own printer? **[`docs/MANUAL.md`](docs/MANUAL.md)**
+is the full step-by-step walkthrough, start to finish.
 If you're not: keep reading, the next section explains what this actually is
 and why it needed to be built at all.
 
