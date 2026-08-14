@@ -326,7 +326,10 @@ This project stands on real work by other people, not just ours:
   [`FrederickAlt/CREALITY-K1-AND-K1-MAX-CFS-RETRUDE-BEFORE-CUT-MOD`](https://github.com/FrederickAlt/CREALITY-K1-AND-K1-MAX-CFS-RETRUDE-BEFORE-CUT-MOD) —
   two independent, more mature reimplementations whose documentation is what
   finally unblocked the `EXTRUDE_PROCESS` sequence for us (see
-  `docs/PROTOCOL.md` for exactly how).
+  `docs/PROTOCOL.md` for exactly how). `gitstonelabs`'s purge-length formula
+  and cycle-split model (reverse-engineered from the compiled stock box
+  wrapper binary) is what `macros/flush_draft.cfg` is built on — see that
+  file's header for the details and cross-checks.
 - [Guilouz/Creality-Helper-Script](https://github.com/Guilouz/Creality-Helper-Script) —
   the community firmware stack all of this runs on top of.
 
