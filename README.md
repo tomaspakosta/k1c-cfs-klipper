@@ -227,9 +227,16 @@ The plan from here:
    multiple passes, safe travel back afterward, temporary acceleration
    limits during the cut — see
    [`FrederickAlt`'s cutter reference docs](https://github.com/FrederickAlt/CREALITY-K1-AND-K1-MAX-CFS-RETRUDE-BEFORE-CUT-MOD/blob/master/docs/unload-cutter-sensor-reference.md)
-   for the reference behavior to match.
+   for the reference behavior to match. A first draft is in
+   [`macros/cut_macro_draft.cfg`](macros/cut_macro_draft.cfg) — **written,
+   not yet tested even once**, do not run it unsupervised.
 2. Wrap all of this into a real Klipper extra with proper gcode commands and
-   background state polling.
+   background state polling. A first draft exists at
+   [`klipper_extra/creality_cfs.py`](klipper_extra/creality_cfs.py) — the
+   protocol calls it makes are the validated ones from this repo, but the
+   Klipper integration itself (config parsing, gcode commands, the reactor
+   timer) hasn't been loaded into a real Klipper yet. See that folder's
+   README for status and how to test it safely.
 
 See [`docs/PROTOCOL.md`](docs/PROTOCOL.md) for what's documented about the
 cutter mechanism so far.
