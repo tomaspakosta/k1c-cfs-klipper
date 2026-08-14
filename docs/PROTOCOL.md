@@ -52,9 +52,10 @@ Boxes ship unaddressed and must be discovered + assigned an address each session
 | `SET_BOX_MODE` | `0x04` | data=`[0x00,0x01]` = IDLE mode (needed before manual/scripted control — disables the box's own automatic buffer management) |
 | `GET_BUFFER_STATE` | `0x05` | 1-byte response: `0x00`=middle, `0x01`=full, `0x02`=empty |
 | `CTRL_CONNECTION_MOTOR_ACTION` | `0x07` | **The command that was missing from our early attempts.** data=`[action]`: `0x00`=STOP, `0x01`=EXTRUDE (mechanically connects the target slot to the shared feed path), `0x02`=RETRUDE. Call this *before* `EXTRUDE_PROCESS`. |
-| `GET_FILAMENT_SENSOR_STATE` | `0x08` | data=`[bank]`. Bank `0x00` = MATERIAL: global 4-bit bitmask, which slots have filament present. Bank `0x01` = CONNECTIONS: which slot is currently mechanically connected. **Empirically confirmed bit mapping: bit0=A, bit1=B, bit2=C, bit3=D** (physical left-to-right), by pulling filament from one slot at a time and watching the bit clear. |
+| `GET_FILAMENT_SENSOR_STATE` | `0x08` | data=`[bank]`. Bank `0x00` = MATERIAL: global 4-bit bitmask, which slots have filament present. Bank `0x01` = CONNECTIONS: which slot is currently mechanically connected. **Empirically confirmed bit mapping: bit0=A, bit1=B, bit2=C, bit3=D** (physical left-to-right), by pulling filament from one slot at a time and watching the bit clear. Independently cross-confirmed by `gitstonelabs/creality-cfs-klipper` — same function code, same `0x00`/`0x01` channel split, though they call it `GET_HARDWARE_STATUS` (a name collision with a *different* function in our own table below — don't confuse the two across projects). |
 | `GET_BOX_STATE` | `0x0A` | General status. Response `status` byte can itself carry `UPDATE_STATE` (`0x30`) as an informational (not error) code, with 4 data bytes describing per-slot update events. |
-| `SET_PRE_LOADING` | `0x0D` | data=`[slot_mask, enable]`. This looked like the "run the feeder motor" command at first, but turned out to behave more like a background monitoring toggle — see "Dead ends" below. |
+| `SET_PRE_LOADING` | `0x0D` | data=`[slot_mask, phase]` — **not** `[slot_mask, enable]` as we first assumed, see below. |
+| `MEASURING_WHEEL` | `0x0E`? | **Untested by us, position inferred not confirmed.** `gitstonelabs` documents this at `0x0E` with a `[GET\|CLEAN]` action byte, response = a 4-byte big-endian IEEE-754 float (mm, negative, magnitude grows as filament feeds). Their `SET_PRE_LOADING` also sits at `0x0D`, matching ours exactly, and `0x0E` is immediately next in sequence on both sides and is otherwise a gap in our own table — reasonable to guess it lines up, but we've never sent this ourselves. See the note under `EXTRUDE_PROCESS` below for why this might matter. |
 | `TIGHTEN_UP_ENABLE` | `0x0F` | data=`[0x01]`/`[0x00]`. Wraps the `EXTRUDE_PROCESS` sequence. |
 | `EXTRUDE_PROCESS` | `0x10` | data=`[slot, stage, amount]`. See the dedicated section below — this took the most work to get right. |
 | `RETRUDE_PROCESS` | `0x11` | data=`[slot, stage]`, stages `0x00` then `0x01`. **Fully working, physically confirmed** — reels filament back onto the spool. Much simpler than extrude; no connection-motor precursor needed. |
@@ -115,6 +116,32 @@ TIGHTEN_UP_ENABLE       data=[0x00]                     (disable)
 CTRL_CONNECTION_MOTOR_ACTION  data=[0x00]                (ACTION=STOP — cleanup)
 ```
 
+**Confirmed while writing this doc, not just a lead:** the 4-byte "telemetry" data in stage-5 responses is a big-endian IEEE-754 float, exactly matching `MEASURING_WHEEL`'s documented format. Decoding our own captured sequence from the toolhead-reach test:
+
+```
+c5 34 53 4e -> -2885.207
+c5 4d 69 2a -> -3286.573
+c5 63 e7 b9 -> -3646.483
+c5 7a 85 79 -> -4008.342
+c5 88 98 b7 -> -4371.089
+c5 93 dc c5 -> -4731.596
+c5 a0 7a 66 -> -5135.300
+c5 ac 11 6e -> -5506.179
+c5 af a0 71 -> -5620.055   <- toolhead sensor triggers around here
+c5 af 9f e3 -> -5619.986
+c5 af 9f 89 -> -5619.942
+```
+
+All negative (matches the documented format exactly), magnitude climbing
+smoothly while the motor was genuinely running, then flattening out to
+essentially noise once the toolhead sensor confirmed material had arrived
+— that's a clean, physically sane signal, not a coincidence. **Practical
+implication:** a smarter `EXTRUDE_PROCESS` stage-5 loop could watch this
+decoded value stabilize (stop changing beyond noise) as a real completion
+signal, instead of the fixed poll-count loop `cfs_cli.py`/`examples/`
+currently use. Not implemented yet — flagging it here as a concrete,
+grounded next improvement rather than another guess.
+
 **What didn't work, and why it's worth knowing:**
 
 - Sending `EXTRUDE_PROCESS` alone (without `CTRL_CONNECTION_MOTOR_ACTION` first) fails deterministically with `EXTRUDE_ERR8` then `EXTRUDE_ERR10`, regardless of which slot you target in the `slot` byte. We tried this 4 different ways (different slot values, different sensor preconditions) before finding the missing step — all 4 produced byte-for-byte identical error responses, which in hindsight was itself a clue that the `slot` byte wasn't the variable that mattered.
@@ -128,7 +155,17 @@ CTRL_CONNECTION_MOTOR_ACTION  data=[0x00]                (ACTION=STOP — cleanu
   **Gotcha:** if your printer happens to be in relative positioning mode (`G91`) when you try this, a `G1 Y160` retreat command will be interpreted as *relative* and can send the toolhead to `current_Y + 160`, which is likely out of range and will error. Send `G90` first to force absolute mode before jogging by coordinate.
 
   Don't assume any of the above for your own hardware without checking — hand-test the mechanism and measure the real position the same way we did. If you're chasing the full pipeline and don't have a cutter mounted/calibrated yet, that's fine: it doesn't block anything else documented on this page.
-- `SET_PRE_LOADING` looked, from its one available real example and its name, like it should be "the" command to trigger feeding. In practice, sending it (with a plausible slot mask + enable byte) sometimes produced a brief, ambiguous state blip and sometimes nothing measurable at all — never a clear, repeatable "motor ran and moved material" result the way `EXTRUDE_PROCESS` (once fixed) and `RETRUDE_PROCESS` did. We suspect it's closer to a background-monitoring/auto-preload toggle (matching debug strings found in the box's own firmware: `preloading enable/disable/aging/read`) than a direct "run motor now" trigger. Worth knowing before you spend time on it expecting motor movement.
+- `SET_PRE_LOADING` looked, from its one available real example and its name, like it should be "the" command to trigger feeding. In practice, sending it (with what we thought was a slot mask + enable byte) sometimes produced a brief, ambiguous state blip and sometimes nothing measurable at all — never a clear, repeatable "motor ran and moved material" result the way `EXTRUDE_PROCESS` (once fixed) and `RETRUDE_PROCESS` did.
+
+  **Resolved** (credit: `gitstonelabs/creality-cfs-klipper`, which decoded this from the compiled stock firmware): the second byte isn't an enable flag at all, it's a `phase`:
+
+  | Phase | Byte | Meaning |
+  |---|---:|---|
+  | `ARM` | `0x00` | |
+  | `DISARM` | `0x01` | |
+  | `SLOT_REARM` | `0x02` | Actually re-runs the physical preload sequence for the given slot mask — a genuinely slow, blocking operation (~38s per their timing notes). |
+
+  Our earlier tests only ever sent phase `0x00`/`0x01` (assuming they meant off/on) — we never tried `0x02`, which is apparently the one that actually moves anything. The real captured reference frame we validated against early in this project, `data=[0x0F, 0x01]`, decodes as "DISARM all slots" in this corrected model — not "enable", which is exactly why it never produced motor movement for us. This also confirms our earlier guess was on the right track: it *is* closer to a background arm/disarm toggle than a direct trigger, just with a third phase we hadn't found yet. **Untested by us**: phase `0x02` specifically, given the ~38s blocking behavior it's worth trying supervised, not blind.
 
 ## Firmware background (if you want to go deeper)
 

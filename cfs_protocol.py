@@ -18,6 +18,7 @@ were determined.
 """
 from __future__ import annotations
 
+import struct
 import time
 import serial
 import serial.tools.list_ports
@@ -95,6 +96,21 @@ def build_frame(slave_addr: int, status: int, function_code: int, data: bytes = 
     body = bytes([length, status, function_code]) + data
     crc = crc8(body)
     return bytes([0xF7, slave_addr]) + body + bytes([crc])
+
+
+def decode_measuring_wheel(data: bytes) -> float | None:
+    """Decode a 4-byte measuring-wheel/odometer reading as the big-endian
+    IEEE-754 float format documented by gitstonelabs/creality-cfs-klipper
+    (credit: their reverse engineering, not ours) and confirmed against
+    our own captured EXTRUDE_PROCESS stage-5 telemetry - see the worked
+    example in docs/PROTOCOL.md. Values are negative and grow in magnitude
+    while material is actively feeding, then flatten out once movement
+    stops (e.g. filament reaching the toolhead sensor).
+
+    Returns None if `data` isn't exactly 4 bytes (nothing to decode)."""
+    if len(data) != 4:
+        return None
+    return struct.unpack(">f", data)[0]
 
 
 class CFSClient:

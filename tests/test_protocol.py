@@ -13,7 +13,7 @@ import sys
 import os
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from cfs_protocol import crc8, build_frame, find_cfs_port  # noqa: E402
+from cfs_protocol import crc8, build_frame, find_cfs_port, decode_measuring_wheel  # noqa: E402
 
 
 # (slave_addr, status, function_code, data, expected_full_frame_hex)
@@ -78,6 +78,32 @@ def test_find_cfs_port_falls_back_gracefully():
     # confirmed separately against actual hardware, not here.
     assert find_cfs_port(fallback="/dev/ttyUSB0") == "/dev/ttyUSB0"
     assert find_cfs_port(fallback="COM99") == "COM99"
+
+
+def test_decode_measuring_wheel_matches_our_captured_extrude_telemetry():
+    # Real EXTRUDE_PROCESS stage-5 telemetry bytes captured during the
+    # toolhead-reach test (see docs/PROTOCOL.md). All should decode as
+    # negative, with magnitude climbing while material was actively
+    # feeding, then flattening out once the toolhead sensor triggered.
+    samples_hex = [
+        "c534534e", "c54d692a", "c563e7b9", "c57a8579", "c58898b7",
+        "c593dcc5", "c5a07a66", "c5ac116e",
+    ]
+    settled_hex = ["c5afa071", "c5af9fe3", "c5af9f89"]
+
+    decoded = [decode_measuring_wheel(bytes.fromhex(h)) for h in samples_hex]
+    assert all(v < 0 for v in decoded), "all readings should be negative"
+    # magnitude climbs while feeding -> the (negative) value itself decreases
+    assert decoded == sorted(decoded, reverse=True), \
+        "magnitude should climb (value should decrease) monotonically while feeding"
+
+    settled = [decode_measuring_wheel(bytes.fromhex(h)) for h in settled_hex]
+    assert max(settled) - min(settled) < 1.0, "settled readings should be within ~noise of each other"
+
+
+def test_decode_measuring_wheel_wrong_length_returns_none():
+    assert decode_measuring_wheel(b"\x00\x01\x02") is None
+    assert decode_measuring_wheel(b"") is None
 
 
 def test_length_byte_matches_payload():
