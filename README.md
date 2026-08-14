@@ -43,35 +43,68 @@ that only works if your printer is running Creality's own firmware, which
 includes a piece of software called `box.py` that knows how to talk to the
 CFS box.
 
-Two things get in the way of that for a lot of people:
+### How we got here
 
-1. **Creality only ships `box.py` as a compiled binary**, not source code —
-   even though Klipper (which it's built on) is licensed under the GPL,
-   which requires source to be available. This is a known, long-standing
-   complaint in the Creality/Klipper community, not just our opinion — see
-   [`fake-name/cfs-reverse-engineering`](https://github.com/fake-name/cfs-reverse-engineering)
-   for the same conclusion from an independent project.
-2. **Plenty of K1C owners aren't running Creality's official firmware at
-   all.** A popular alternative is
-   [Guilouz's Creality-Helper-Script](https://github.com/Guilouz/Creality-Helper-Script),
-   which replaces Creality's stack with a more standard, community-maintained
-   one (mainline-style Klipper, real Moonraker, root access, no telemetry).
-   That's a genuinely better experience for a lot of use cases — but it never
-   shipped with CFS support, because Creality never open-sourced the piece
-   that talks to it.
+This started with a CFS retrofit kit on an earlier K1C — a mainboard
+revision (`CR4CU220812S12`) that's supposed to natively support CFS, but
+whose installed firmware only *identified itself* internally as the older
+`S11` variant. In practice that meant real, reproducible hardware errors:
+two of the four material slots consistently failed to retract/extrude
+(`RETRUDE_ERR7`, `RETRUDE_ERR2`, extrude "blocked at the connections") while
+the other two worked fine — and this wasn't a one-off; it reproduced across
+manual tests, survived full power-cycles, and happened regardless of which
+filament was loaded.
 
-That was exactly the situation we started from: a K1C on the board variant
-`CR4CU220812S12` (the version that officially supports CFS) — but the
-firmware itself only *identifies* as the older `S11` variant internally, and
-the community Klipper stack it's running has **no trace of `box.py`
-anywhere** — not in the live config, not in the ROM factory partition, not
-in any backup. The config file even had a comment left behind: `# K1C -
-Cleaned Macro Config (Without CFS)`. Someone had deliberately stripped it out
-at some point.
+That looked exactly like a firmware/hardware mismatch, and a public Creality
+forum thread confirmed other S12-board owners hitting the identical wall.
+So: a support ticket to Creality, asking two direct questions — is there a
+proper S12 firmware, and does this qualify for a warranty repair.
 
-So: physically capable hardware, a CFS unit sitting there ready to use, and
-no software path to talk to it that didn't mean giving up the better,
-community-maintained firmware. That's the gap this project fills.
+The reply cycle that followed didn't really answer either one:
+
+- Warranty was declined outright because the printer had been bought
+  second-hand with no original proof of purchase — understandable, but it
+  closed that door immediately.
+- On the firmware question, support repeated *"S11 and S12 use this same
+  firmware, don't worry"* and linked a generic flashing tutorial — without
+  ever directly confirming the one thing that had actually been asked:
+  whether installing S11-branded firmware on an S12 board was officially
+  supported and safe, or whether a native S12 build existed at all. Pushed
+  a second time for an explicit yes/no on exactly that, the answer was the
+  same generic line again, still not a direct confirmation either way.
+
+That's a genuinely risky position to flash from — official-sounding
+reassurance with no real commitment behind it, on hardware that isn't
+covered if something goes wrong. So flashing anything was ruled out, and the
+CFS on that machine stayed unresolved.
+
+Separately, and around the same time, that made it worth reconsidering the
+whole approach on a second K1C rather than staying dependent on Creality's
+firmware at all. A popular alternative firmware path exists —
+[Guilouz's Creality-Helper-Script](https://github.com/Guilouz/Creality-Helper-Script),
+which replaces Creality's stack with a more standard, community-maintained
+one (mainline-style Klipper, real Moonraker, root access, no telemetry). It's
+a genuinely better experience day-to-day — but it never shipped with CFS
+support, because Creality never open-sourced the piece that talks to it in
+the first place. That's not an oversight on Guilouz's part: Creality only
+ever distributes `box.py` as a compiled binary, no source, even though
+Klipper (which it's built on) is GPL-licensed and requires source to be
+available — a known, long-standing complaint in the community, not just our
+opinion (see
+[`fake-name/cfs-reverse-engineering`](https://github.com/fake-name/cfs-reverse-engineering)
+for the same conclusion from an independent project).
+
+Auditing that second printer confirmed it: no trace of `box.py` anywhere —
+not in the live config, not in the ROM factory partition, not in any backup.
+The config file even had a comment left behind: `# K1C - Cleaned Macro
+Config (Without CFS)`. Someone had deliberately stripped it out at some
+point.
+
+So, twice over: physically capable hardware, a CFS unit sitting there ready
+to use, and no trustworthy software path to it that didn't mean either
+flashing on unclear advice or giving up a better firmware stack entirely.
+That's the gap this project fills — build our own, fully open, verified
+against real hardware one command at a time.
 
 ## What we found instead
 
