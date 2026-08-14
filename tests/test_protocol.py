@@ -13,7 +13,7 @@ import sys
 import os
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from cfs_protocol import crc8, build_frame  # noqa: E402
+from cfs_protocol import crc8, build_frame, find_cfs_port  # noqa: E402
 
 
 # (slave_addr, status, function_code, data, expected_full_frame_hex)
@@ -69,6 +69,15 @@ def test_crc8_known_values():
     # couple of these directly, not just via build_frame.
     assert crc8(bytes([0x05, 0x00, 0xA1, 0xFE, 0xFE])) == 0xF8
     assert crc8(bytes([0x03, 0x00, 0xA3])) == 0xDD
+
+
+def test_find_cfs_port_falls_back_gracefully():
+    # CI runners (and most dev machines) won't have a CH340 device
+    # plugged in - this just confirms the fallback path never raises and
+    # returns the fallback value unchanged. The real detection logic is
+    # confirmed separately against actual hardware, not here.
+    assert find_cfs_port(fallback="/dev/ttyUSB0") == "/dev/ttyUSB0"
+    assert find_cfs_port(fallback="COM99") == "COM99"
 
 
 def test_length_byte_matches_payload():
