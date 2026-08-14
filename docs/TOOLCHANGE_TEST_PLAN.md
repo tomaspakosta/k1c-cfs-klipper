@@ -74,15 +74,34 @@ through it by re-running extrude on top of a snag.
 
 Only after phase 2 has worked cleanly at least once by hand:
 
-1. Draft a `CFS_TOOLCHANGE` macro combining the phase 2 steps (see
-   `macros/toolchange_draft.cfg` in this repo — **written from the phase 2
-   steps above, not yet run as a single macro**, same "draft" status as
-   `cut_macro_draft.cfg`).
-2. Test *that macro* the same way — supervised, one slot swap, watching
-   every step.
-3. Only after the macro itself is confirmed working, consider wiring
-   `T0`-`T3` gcode command aliases to it for actual slicer use — that's
-   further out and not attempted yet.
+1. Add a `[save_variables]` section to `printer.cfg` if you don't already
+   have one (see `macros/toolchange_draft.cfg`'s header comment for the
+   exact snippet) — `CFS_TOOLCHANGE` uses it to remember which slot is
+   active across calls, so you don't have to pass `FROM=` by hand every
+   time.
+2. Load `macros/toolchange_draft.cfg` — **written from the phase 2 steps
+   above, not yet run as a single macro**, same "draft" status as
+   `cut_macro_draft.cfg`.
+3. Test *that macro* the same way — supervised, one slot swap, watching
+   every step: `CFS_TOOLCHANGE FROM=A TO=B` explicitly the first time,
+   then `CFS_TOOLCHANGE TO=A` (no `FROM`) to confirm the saved-state
+   lookup picked up B correctly from the previous call.
+
+## Phase 4 — flush and T0-T3 (further out, more speculative)
+
+Only after phase 3's swap-only macro is confirmed working repeatedly:
+
+1. `macros/flush_draft.cfg`'s `CFS_FLUSH` is the **least validated piece
+   in this repo** — there's no empirical data behind it at all beyond "a
+   printer-side purge extrusion belongs somewhere around here" from the
+   reference docs. Test it completely standalone first (heated, away from
+   any model, watching it) before ever chaining it after a toolchange.
+2. Once both `CFS_TOOLCHANGE` and `CFS_FLUSH` are independently trusted,
+   `macros/tool_aliases_draft.cfg` wires `T0`-`T3` to call them together
+   using the saved active-slot state. Call `T0`/`T1`/etc. by hand from the
+   console and confirm the result before ever pointing a slicer at them.
+3. Only after *that* works reliably by hand does it make sense to touch
+   OrcaSlicer settings at all — see the notes below.
 
 ## Setting up your slicer (for later — not relevant until `T0`-`T3` exist and work)
 

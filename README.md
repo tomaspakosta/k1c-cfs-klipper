@@ -286,18 +286,24 @@ printer** (none run even once yet, clearly marked as such in each file):
   `CFS_TOOLCHANGE` macro combining cut → retrude old → extrude new, based
   on the real cut/retrude/load/flush/restore order documented in
   [`FrederickAlt`'s material-change-flow.md](https://github.com/FrederickAlt/CREALITY-K1-AND-K1-MAX-CFS-RETRUDE-BEFORE-CUT-MOD/blob/master/docs/material-change-flow.md).
-  Deliberately does *not* include purge/flush yet — see
-  [`docs/TOOLCHANGE_TEST_PLAN.md`](docs/TOOLCHANGE_TEST_PLAN.md) for the
-  staged, supervised order to test these pieces in (individually first,
-  then as a manual sequence, only then as this macro).
+  Remembers the active slot across calls via Klipper's `save_variables`,
+  so you don't have to pass `FROM=` by hand every time.
+- [`macros/flush_draft.cfg`](macros/flush_draft.cfg) — `CFS_FLUSH`, a
+  purge push through the printer's own extruder after a toolchange. **The
+  least-validated piece in this repo** — there's no empirical data behind
+  it at all yet, not even a manual test, only "something like this belongs
+  here" from the reference docs.
+- [`macros/tool_aliases_draft.cfg`](macros/tool_aliases_draft.cfg) — wires
+  `T0`-`T3` to `CFS_TOOLCHANGE` + `CFS_FLUSH` for eventual slicer use, once
+  both of those are independently trusted by hand first.
 
-Once a full swap is confirmed working through that plan, wiring up
-`T0`-`T3` for actual slicer-driven multi-color printing is the step after
-— not attempted yet. See
-[Setting up your slicer](docs/TOOLCHANGE_TEST_PLAN.md) notes there for
-what's known to work on the OrcaSlicer side from prior work on different
-hardware (`manual_filament_change: 0`, sequential `T0..T3` → slot A..D
-mapping) once that point is reached.
+[`docs/TOOLCHANGE_TEST_PLAN.md`](docs/TOOLCHANGE_TEST_PLAN.md) has the
+full staged, supervised order to test all of this in — individual pieces,
+then a manual sequence, then the swap macro alone, and only then flush and
+`T0`-`T3` together. It also has what's known to work on the OrcaSlicer
+side from prior work on different hardware (`manual_filament_change: 0`,
+sequential `T0..T3` → slot A..D mapping) for once that point is reached —
+none of it usefully testable before `T0`-`T3` themselves work by hand.
 
 See [`docs/PROTOCOL.md`](docs/PROTOCOL.md) for what's documented about the
 cutter mechanism, and [`docs/MANUAL.md`](docs/MANUAL.md) for the full
