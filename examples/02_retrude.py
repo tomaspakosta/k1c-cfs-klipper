@@ -19,13 +19,14 @@ import time
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from cfs_protocol import CFSClient, SLOT_A  # noqa: E402
 
-PORT = "/dev/ttyUSB0"
+PORT = None  # auto-detects a CH340-family adapter; set e.g. "/dev/ttyUSB0" or "COM5" to override
 BOX_ADDR = 0x01
 SLOT = SLOT_A  # change to SLOT_B / SLOT_C / SLOT_D as needed
 
 
 def main():
     with CFSClient(PORT) as cfs:
+        print(f"Using port: {cfs.port}")
         print("=== SET_BOX_MODE -> IDLE ===")
         cfs.set_box_mode_idle(BOX_ADDR)
         time.sleep(0.3)

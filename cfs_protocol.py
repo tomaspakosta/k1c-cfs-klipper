@@ -20,9 +20,31 @@ from __future__ import annotations
 
 import time
 import serial
+import serial.tools.list_ports
 
 
 DEFAULT_BAUD = 230400
+
+# CFS boxes we've seen connect via a CH340/CH341 USB-serial adapter,
+# vendor ID 0x1A86 (product ID 0x7523 for the specific one we tested with,
+# but other CH34x variants exist under the same vendor).
+CH340_VENDOR_ID = 0x1A86
+
+
+def find_cfs_port(fallback: str = "/dev/ttyUSB0") -> str:
+    """Best-effort auto-detect of the CFS box's serial port by matching
+    the CH340/CH341 USB vendor ID, cross-platform (Windows COM ports,
+    Linux /dev/ttyUSB*, etc. via pyserial's list_ports). Falls back to
+    `fallback` if nothing matching is found or list_ports isn't supported
+    on this platform - always double check this picked the right device
+    if you have other CH340-based peripherals plugged in too."""
+    try:
+        for port in serial.tools.list_ports.comports():
+            if port.vid == CH340_VENDOR_ID:
+                return port.device
+    except Exception:
+        pass
+    return fallback
 
 # Function codes (validated against real hardware + real captured traffic)
 FN = {
@@ -79,7 +101,13 @@ class CFSClient:
     """Thin synchronous client. Not reactor-safe — do not use this directly
     inside a Klipper extra; see docs/PROTOCOL.md for notes on that."""
 
-    def __init__(self, port: str, baud: int = DEFAULT_BAUD):
+    def __init__(self, port: str | None = None, baud: int = DEFAULT_BAUD):
+        """`port=None` (the default) auto-detects a CH340-family adapter
+        via find_cfs_port(); pass an explicit path/COM port to skip
+        auto-detection."""
+        if port is None:
+            port = find_cfs_port()
+        self.port = port
         self.ser = serial.Serial(port, baudrate=baud, timeout=1.0)
 
     def close(self):

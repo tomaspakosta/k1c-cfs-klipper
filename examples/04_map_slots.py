@@ -14,7 +14,7 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from cfs_protocol import CFSClient  # noqa: E402
 
-PORT = "/dev/ttyUSB0"
+PORT = None  # auto-detects a CH340-family adapter; set e.g. "/dev/ttyUSB0" or "COM5" to override
 BOX_ADDR = 0x01
 
 
@@ -24,6 +24,7 @@ def read_bitmask(cfs):
 
 def main():
     with CFSClient(PORT) as cfs:
+        print(f"Using port: {cfs.port}")
         print("This will read the filament sensor bitmask, then ask you to remove")
         print("filament from each slot one at a time (left to right) so you can see")
         print("which bit corresponds to which physical position.\n")

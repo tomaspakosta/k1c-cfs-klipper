@@ -32,7 +32,8 @@ Discovery · addressing · sensors · RFID · `RETRUDE` · `EXTRUDE`
 [Support](#support)
 
 If you're technical: jump straight to [`docs/PROTOCOL.md`](docs/PROTOCOL.md)
-for the full wire protocol and [`examples/`](examples/) for working scripts.
+for the full wire protocol, [`cfs_cli.py`](cfs_cli.py) for a ready-to-run
+tool, or [`examples/`](examples/) for annotated individual scripts.
 If you're not: keep reading, the next section explains what this actually is
 and why it needed to be built at all.
 
@@ -194,16 +195,30 @@ moves a motor. If it can't reach GitHub over HTTPS from the printer itself
 (common on this class of firmware — see the script's own comments), it'll
 tell you to `scp` `cfs_protocol.py` over instead and re-run.
 
-Or run the same first check straight from your own machine:
+Then, the friendliest way to actually use this — one tool, a menu if you
+just run it, or subcommands if you want to script it:
 
 ```bash
 pip install pyserial
-python examples/01_discover_and_read_sensors.py
+
+python cfs_cli.py                    # interactive menu
+python cfs_cli.py status             # read-only, scriptable
+python cfs_cli.py retrude --slot A   # moves a motor - asks to confirm interactively
+python cfs_cli.py extrude --slot A --polls 20
+python cfs_cli.py map-slots
 ```
 
-That script is entirely read-only — safe to run any time to sanity-check
-your connection. From there:
+`status` and `map-slots` are read-only. `retrude`/`extrude` move a motor —
+in the interactive menu they ask you to confirm first; run non-interactively
+(as above) they don't prompt, since a script can't answer a prompt — only
+automate those once you've verified the command by hand and are comfortable
+running it unattended.
 
+If you'd rather read/copy individual pieces instead of using the CLI, the
+same functionality exists as separate annotated scripts in
+[`examples/`](examples/):
+
+- `examples/01_discover_and_read_sensors.py` — read-only sanity check
 - `examples/02_retrude.py` — reels filament back (moves a motor, but the
   "safe" one to start with)
 - `examples/03_extrude.py` — feeds filament forward past the buffer (moves a
@@ -212,8 +227,10 @@ your connection. From there:
   (A/B/C/D) corresponds to which sensor bit on *your* box (ours came out
   left-to-right, but it's cheap to double-check)
 
-All scripts default to `/dev/ttyUSB0` — edit the `PORT` constant near the
-top of each file if yours enumerates differently.
+Both the CLI and the examples auto-detect the CFS's serial port (matching
+its CH340/CH341 USB vendor ID) and print which one they picked — pass
+`--port` (CLI) or set the `PORT` constant (examples) explicitly if you have
+another CH340 device plugged in too and auto-detect picks the wrong one.
 
 No hardware needed to check the framing/CRC logic itself — it's tested
 against real captured traffic:
