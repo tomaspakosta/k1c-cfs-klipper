@@ -83,7 +83,17 @@ Boxes ship unaddressed and must be discovered + assigned an address each session
 
 This is the one that took real effort, so it's worth documenting the journey, not just the answer.
 
-**What finally worked**, physically confirmed (filament actually pushed material past the buffer):
+**What finally worked**, physically confirmed — first that filament pushed
+past the internal buffer, and later (once the toolhead-side filament switch
+was wired back up) confirmed reaching the toolhead sensor, seen by watching
+Klipper's `filament_switch_sensor filament_sensor_2` flip from not-detected
+to detected mid-run. **Caveat on that second result:** the PTFE tube to the
+toolhead wasn't connected for this test, so the filament was feeding through
+open air rather than a guided path, and it was manually guided into the
+toolhead rather than arriving on its own. So this confirms the box can
+extrude enough length and that the sensor read/logic works correctly — it
+is *not* yet a confirmed fully automatic, hands-off box→PTFE→toolhead feed.
+That's the next thing to verify once the tube is connected.
 
 ```
 SET_BOX_MODE            data=[0x00, 0x01]              (IDLE mode)
@@ -95,7 +105,12 @@ EXTRUDE_PROCESS         data=[slot, 0x05, 0x00]         (stage 5 — poll this r
                                                           this is where the motor actually runs.
                                                           The response's data bytes are live
                                                           telemetry and should visibly change
-                                                          between polls if it's really moving.)
+                                                          between polls if it's really moving.
+                                                          Keep polling: ~10 polls got material
+                                                          past the buffer, but it took ~40 polls
+                                                          at a ~0.4s interval for it to reach the
+                                                          toolhead sensor - there's no separate
+                                                          "go further" command, just keep going.)
 TIGHTEN_UP_ENABLE       data=[0x00]                     (disable)
 CTRL_CONNECTION_MOTOR_ACTION  data=[0x00]                (ACTION=STOP — cleanup)
 ```
@@ -105,7 +120,8 @@ CTRL_CONNECTION_MOTOR_ACTION  data=[0x00]                (ACTION=STOP — cleanu
 - Sending `EXTRUDE_PROCESS` alone (without `CTRL_CONNECTION_MOTOR_ACTION` first) fails deterministically with `EXTRUDE_ERR8` then `EXTRUDE_ERR10`, regardless of which slot you target in the `slot` byte. We tried this 4 different ways (different slot values, different sensor preconditions) before finding the missing step — all 4 produced byte-for-byte identical error responses, which in hindsight was itself a clue that the `slot` byte wasn't the variable that mattered.
 - Even more confusingly: once we *did* get real motor movement (before adding the connection-motor step, purely by chance from other testing), the motor ran on a **different physical slot than the `slot` byte requested**. This makes sense in hindsight — without `CTRL_CONNECTION_MOTOR_ACTION`, the box just runs whatever slot's feed path happens to already be mechanically connected (a leftover/default state), completely ignoring the `slot` byte in `EXTRUDE_PROCESS` until the connection step actually routes it.
 - A stage numbered `0x06` appears in one real captured reference dump (from someone else's box, different firmware revision), so we initially tried `...→ 0x05 → 0x06`. Other reference material describes the normal sequence as `0 → 4 → 5 → 7` instead, with `0x06` being a recovery/retry state rather than a normal step. We never needed to explicitly send `0x07` either — stopping the stage-5 polling loop and moving to cleanup was sufficient once the connection-motor step was in place. Your mileage may vary by firmware revision; if stage 5 polling errors out for you even with the connection-motor step done, trying an explicit `0x07` afterward is a reasonable next thing to check.
-- Two independent external references describe stages `0x06`/`0x07` (in *their* numbering) as gated by "the toolhead filament switch" activating — i.e. a physical sensor at the printer's toolhead, separate from anything on the CFS box itself. We don't have that hardware connected in our setup (see the top-level README for why), and material still successfully fed past the buffer without it. Our working sequence above only gets material as far as "through the box, past the buffer" — it does **not** drive filament all the way to a toolhead or trigger a cutter. If you're chasing the full box→buffer→toolhead pipeline and hit a wall past this point, that missing sensor is the first thing we'd check.
+- Two independent external references describe stages `0x06`/`0x07` (in *their* numbering) as gated by "the toolhead filament switch" activating. We initially had that sensor disconnected and could still get material past the buffer without it — but once we wired the sensor back up and simply kept polling stage 5 for longer (~40 polls instead of ~10), the filament reached the toolhead sensor on its own, with no explicit `0x06`/`0x07` ever sent. So for this firmware revision at least, stage 5 alone — given enough time — drives the whole feed; the "gating" in those other references may be about the *wrapper* deciding when to stop polling and declare success, not about the box firmware requiring a distinct stage transition. (See the caveat above though — that result was without a PTFE tube connected, so treat it as "the motor/sensor path works," not yet as "a fully automated feed.")
+- The cutter turned out to be a non-issue for the extrude side: **it's not a CFS protocol command at all.** It's a pure toolhead-motion sequence — home X/Y, move to a configured pre-cut position, move to a configured cut position to drag filament across a fixed blade, optionally confirmed by a separate cut-detect switch — implemented entirely as Klipper G-code macros, with no bytes sent to the CFS box. If you're chasing the full pipeline and don't have a cutter mounted yet, that's fine: it doesn't block anything documented on this page.
 - `SET_PRE_LOADING` looked, from its one available real example and its name, like it should be "the" command to trigger feeding. In practice, sending it (with a plausible slot mask + enable byte) sometimes produced a brief, ambiguous state blip and sometimes nothing measurable at all — never a clear, repeatable "motor ran and moved material" result the way `EXTRUDE_PROCESS` (once fixed) and `RETRUDE_PROCESS` did. We suspect it's closer to a background-monitoring/auto-preload toggle (matching debug strings found in the box's own firmware: `preloading enable/disable/aging/read`) than a direct "run motor now" trigger. Worth knowing before you spend time on it expecting motor movement.
 
 ## Firmware background (if you want to go deeper)

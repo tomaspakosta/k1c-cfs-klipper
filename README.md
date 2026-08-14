@@ -126,8 +126,8 @@ once we were confident in what we were sending.
 | ✅ | Reading status, firmware version, and filament sensors |
 | ✅ | Reading RFID data per slot *(most non-Creality-branded spools have no chip to read — expected, not a bug)* |
 | ✅ | **`RETRUDE`** — reeling filament back onto the spool |
-| ✅ | **`EXTRUDE`** — feeding filament from the spool, through the box, past the internal buffer |
-| ⏳ | Driving filament the rest of the way to the toolhead / operating the cutter — needs the toolhead-side hardware reconnected, see [Status / what's next](#status--whats-next) |
+| ✅ | **`EXTRUDE`** — feeding filament from the spool, through the box, past the buffer, and (manually guided into the toolhead, PTFE tube not yet connected) far enough to trigger Klipper's toolhead filament sensor — see the caveat in `docs/PROTOCOL.md` before assuming this is a fully automated feed already |
+| ⏳ | A confirmed *automatic* box→PTFE→toolhead feed, and operating the cutter (pure toolhead motion, not a CFS protocol command — see `docs/PROTOCOL.md`) |
 
 ## How it fits together
 
@@ -144,9 +144,10 @@ graph LR
     Box --> C["Slot C"]
     Box --> D["Slot D"]
     A & B & C & D --> Buffer["Spring buffer<br/>(20mm reserve)"]
-    Buffer -.->|not yet driven<br/>from here| Toolhead["Toolhead<br/>(cutter + sensor)"]
+    Buffer -.->|no PTFE tube yet,<br/>manually guided in testing| Sensor["Toolhead filament sensor<br/>(reached, sensor confirmed)"]
+    Sensor -.->|cutter not wired<br/>up yet| Cutter["Cutter<br/>(toolhead motion, no protocol cmd)"]
 
-    style Toolhead stroke-dasharray: 5 5
+    style Cutter stroke-dasharray: 5 5
 ```
 
 And this is the sequence that actually gets filament moving — the part that
@@ -173,7 +174,7 @@ sequenceDiagram
     end
     H->>B: TIGHTEN_UP_ENABLE (off)
     H->>B: CTRL_CONNECTION_MOTOR_ACTION (STOP)
-    Note over H,B: filament now past the buffer ✅
+    Note over H,B: filament reaches the toolhead sensor ✅<br/>(no stage 6/7 needed, just keep polling stage 5 —<br/>but manually guided in this test, no PTFE tube yet)
 ```
 
 ## Quick start
@@ -204,11 +205,11 @@ protocol client, meant as the foundation for one. The plan:
 
 1. Wrap this into a real Klipper extra with proper gcode commands and
    background state polling.
-2. Reconnect the toolhead-side cutter and filament sensor (currently
-   disassembled on our test unit) and work out the remaining piece needed to
-   drive filament all the way to the toolhead — see the notes at the end of
-   [`docs/PROTOCOL.md`](docs/PROTOCOL.md) for exactly where that picture is
-   still incomplete.
+2. Wire the cutter back up (currently unmounted on our test unit) and
+   implement the cut motion sequence — this turns out to be pure toolhead
+   G-code motion, not a CFS protocol command, so it doesn't block on
+   anything in this repo. See [`docs/PROTOCOL.md`](docs/PROTOCOL.md) for
+   what's documented about it so far.
 
 Contributions, corrections, and hardware validation on other CFS/board
 revisions are welcome — open an issue.
