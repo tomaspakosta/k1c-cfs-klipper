@@ -43,6 +43,15 @@ def main():
         if conn is not None:
             print(f"  bitmask={conn:#04x} ({conn:04b}b)")
 
+        print("\n=== Version / serial ===")
+        print(f"  {cfs.get_version_sn(BOX_ADDR)}")
+
+        print("\n=== RFID (note: uses a plain 0-3 index, not the A/B/C/D bitmask -")
+        print("    see the docstring on get_rfid() before reading too much into this) ===")
+        for slot_index in range(4):
+            rfid = cfs.get_rfid(BOX_ADDR, slot_index)
+            print(f"  index {slot_index}: {rfid}")
+
 
 if __name__ == "__main__":
     main()

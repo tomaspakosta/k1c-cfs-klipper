@@ -126,6 +126,48 @@ class CFSClient:
     def get_box_state(self, addr: int) -> bytes:
         return self.send(addr, 0xFF, FN["GET_BOX_STATE"])
 
+    def get_version_sn(self, addr: int) -> str | None:
+        """Returns the box's version/serial string, e.g. "113100008730633225CMPN"."""
+        resp = self.send(addr, 0xFF, FN["GET_VERSION_SN"])
+        if len(resp) >= 6:
+            data = resp[5:-1]
+            try:
+                return data.decode("ascii")
+            except UnicodeDecodeError:
+                return None
+        return None
+
+    def get_rfid(self, addr: int, slot_index: int) -> str | None:
+        """Returns RFID text, e.g. "A:none;" when no chip is present (most
+        non-Creality-branded spools have no chip - expected, not an error).
+
+        NOTE: `slot_index` here is a plain 0-3 index, NOT the bit0=A..bit3=D
+        bitmask used by get_filament_sensor_bitmask()/EXTRUDE_PROCESS/etc.
+        We tested indices 0-3 live and got back inconsistent-looking
+        results (index 0 -> invalid, 1 -> "A:...", 2 -> "B:...", 3 ->
+        "A:...;B:...;" both at once) that we never fully explained - treat
+        this method's indexing as unresolved/exploratory, not something to
+        build real slot-selection logic on top of yet."""
+        resp = self.send(addr, 0xFF, FN["GET_RFID"], bytes([slot_index]))
+        if len(resp) >= 6:
+            data = resp[5:-1]
+            try:
+                return data.decode("ascii")
+            except UnicodeDecodeError:
+                return None
+        return None
+
+    def get_remain_len(self, addr: int, slot_index: int) -> bytes | None:
+        """Returns the raw 4-byte remaining-length payload. Same plain 0-3
+        `slot_index` convention as get_rfid() (see that docstring) - not
+        the A/B/C/D bitmask used elsewhere. We haven't fully decoded this
+        field's units/encoding either, so this returns raw bytes rather
+        than a guessed numeric value - see docs/PROTOCOL.md."""
+        resp = self.send(addr, 0xFF, FN["GET_REMAIN_LEN"], bytes([slot_index]))
+        if len(resp) >= 9:
+            return resp[5:9]
+        return None
+
     def get_filament_sensor_bitmask(self, addr: int, bank: int = 0x00) -> int | None:
         """bank=0x00 (MATERIAL): global 4-bit bitmask of which slots have
         filament present (bit0=A, bit1=B, bit2=C, bit3=D).

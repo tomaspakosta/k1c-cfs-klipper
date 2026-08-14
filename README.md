@@ -2,6 +2,7 @@
 
 # K1C CFS without official Creality firmware
 
+[![tests](https://github.com/tomaspakosta/k1c-cfs-klipper/actions/workflows/tests.yml/badge.svg)](https://github.com/tomaspakosta/k1c-cfs-klipper/actions/workflows/tests.yml)
 [![License: GPL v3](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
 ![Python](https://img.shields.io/badge/python-3.8%2B-blue)
 ![Status](https://img.shields.io/badge/status-hardware--validated-brightgreen)
