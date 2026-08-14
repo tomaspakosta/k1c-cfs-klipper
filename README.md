@@ -135,7 +135,8 @@ once we were confident in what we were sending.
 | ✅ | **`EXTRUDE`** — feeding filament from the spool, through the box, through the (now fully connected) PTFE tube, to the toolhead — **confirmed fully automatic**, no manual guidance, `filament_detected: true` in Klipper after re-testing post-upgrade-kit-remount |
 | ✅ | The cutter's lever-actuated cut position — found by hand, then **confirmed reproducible with plain `G1` moves**, including after the upgrade-kit remount: retreat and return reliably re-triggers it |
 | ✅ | Recovering from a post-run latched error status — a completed `EXTRUDE` can leave the box reporting an error on `GET_BOX_STATE` (LED visibly red) even though it actually succeeded; re-sending `SET_BOX_MODE` (IDLE) clears it, now done automatically at the end of every extrude call in this repo |
-| ⏳ | A full cut *macro* and the combined toolchange sequence — individual pieces are proven, [`docs/TOOLCHANGE_TEST_PLAN.md`](docs/TOOLCHANGE_TEST_PLAN.md) phase 1 is done, phases 2-4 (manual swap, then the macros) are next |
+| ⚠️ | **Switching which slot is active is currently unreliable** — `RETRUDE`/`EXTRUDE` are solid on a *single* slot, but repeatedly asking the box to switch to a different slot mid-session failed 3 different ways in testing; the box appears to stay mechanically "connected" to whichever slot was used first, regardless of which slot later commands target. Root cause not yet found — see [`docs/TOOLCHANGE_TEST_PLAN.md`](docs/TOOLCHANGE_TEST_PLAN.md) phase 2 for the full writeup, including a promising but unconfirmed lead (a toolhead-side retraction step our `RETRUDE` is currently missing) |
+| ⏳ | A full cut *macro* and the combined toolchange sequence — individual pieces are proven **on a single slot**; multi-slot switching (phase 2) is blocked on the issue above, phases 3-4 (the macros) wait on that |
 
 ## How it fits together
 

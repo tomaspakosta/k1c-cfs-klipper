@@ -71,30 +71,61 @@ remounted hardware.
 
 Move to phase 2.
 
-## Phase 2 — manual end-to-end swap (no macro yet, just the sequence by hand)
+## Phase 2 — manual end-to-end swap ⚠️ BLOCKED (2026-08-14) — steps 1-3 done, step 4 hits a real unresolved issue
 
 This is the real test: does cut -> retrude -> extrude work **as a
 sequence**, not just individually.
 
 1. Make sure slot A (or whichever slot is currently loaded at the
    toolhead) has filament reaching the toolhead sensor (run
-   `extrude --slot A` from phase 1 if not).
-2. Run the single cut pass (phase 1, step 3) to sever it.
+   `extrude --slot A` from phase 1 if not). ✅ done (carried over from
+   phase 1).
+2. Run the single cut pass (phase 1, step 3) to sever it. ✅ done.
 3. `python cfs_cli.py retrude --slot A` — pull the now-severed material
    back into the box. Watch that it retracts cleanly (no snag at the cut
-   point).
+   point). ✅ done, retracted cleanly.
 4. `python cfs_cli.py extrude --slot B` (a *different* slot) — load the
-   new material forward to the toolhead sensor.
+   new material forward to the toolhead sensor. ❌ **repeatedly failed,
+   3 attempts, different symptoms each time** (latched error status that
+   wouldn't clear / total box silence / motor spun on the wrong slot
+   while the requested slot errored). Root cause, high confidence:
+   **the box never actually switches which slot is "connected" to the
+   shared feed path** — it stayed mechanically connected to slot A (the
+   first slot we ever used) the whole time, regardless of which slot
+   we asked `EXTRUDE_PROCESS` to use. The real slot-switch mechanism is
+   still unknown. Full write-up, all 3 attempts, and the diagnostic
+   test that proved it (`EXTRUDE --slot C` produced real motion at slot
+   A while C's LED errored) are in the private research log.
 5. Confirm `filament_detected` is true again, and that what's physically
-   at the toolhead is now slot B's filament, not leftover A.
+   at the toolhead is now slot B's filament, not leftover A. — not
+   reached.
 
-If this works cleanly, you have a manually-proven material swap. That's
-the point to write it up as a real macro (phase 3) rather than before.
+**Leading hypothesis for next session:** `CFS_RETRUDE`'s box-side
+sequence alone may be incomplete — a reference implementation
+(gitstonelabs/creality-cfs-klipper) pairs its unload with an actual
+**toolhead-side retraction** (`G1 E-15 F360` on the printer's own
+extruder, mid-sequence, hotend heated) and gates completion on the
+toolhead filament switch actually clearing, which our `retrude_stage()`
+never does. A first live test of this (same evening, hotend heated to
+220°C) didn't give a clean answer either way — it hit a real (if
+practically harmless) `FR2832` "feeding/retraction jam" fault, most
+likely because slot A had already been retruded down to a short leftover
+stub earlier that same session, not enough material for the sequence's
+long reel-in phase. **Retest on a slot that hasn't been touched yet
+this session** (full spool-side material, never extruded/retruded)
+before drawing a real conclusion.
 
 **If something snags or doesn't retract cleanly at step 3**: stop and
 look at it physically before continuing - a botched retrude right after a
 cut is exactly the kind of thing that can jam a Bowden path. Don't push
 through it by re-running extrude on top of a snag.
+
+**LED error reference, useful going forward** (from Creality's CFS
+error-code wiki): all slots flashing red together = communication error
+(`FS2831`, printer can't talk to the box at all); **double red flash on
+one specific slot = feeding/retraction jam (`FR2832`)** — exactly what
+we hit; solid/stuck sensor status = debris or a jammed micro-switch in
+the feed path.
 
 ## Phase 3 — turn it into a macro
 
