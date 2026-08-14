@@ -179,6 +179,23 @@ sequenceDiagram
 
 ## Quick start
 
+Fastest path — copy [`scripts/selftest.sh`](scripts/selftest.sh) onto the
+printer and run it there (read it first, then):
+
+```bash
+scp scripts/selftest.sh root@<printer-ip>:/tmp/
+ssh root@<printer-ip> sh /tmp/selftest.sh
+```
+
+It detects your Python/pyserial setup, finds the CFS's USB device
+automatically, and runs a **read-only** self-test (discovery, addressing,
+sensor/version reads) — confirmed working against real hardware, never
+moves a motor. If it can't reach GitHub over HTTPS from the printer itself
+(common on this class of firmware — see the script's own comments), it'll
+tell you to `scp` `cfs_protocol.py` over instead and re-run.
+
+Or run the same first check straight from your own machine:
+
 ```bash
 pip install pyserial
 python examples/01_discover_and_read_sensors.py
