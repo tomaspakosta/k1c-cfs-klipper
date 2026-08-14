@@ -1,13 +1,37 @@
+<div align="center">
+
 # K1C CFS without official Creality firmware
 
-Talk directly to a Creality CFS (multi-material filament box) from a K1C running
-a **community Klipper stack**, with **zero dependency on Creality's official,
-closed-source CFS firmware**. Discovery, addressing, sensors, RFID, and both
-`RETRUDE` and `EXTRUDE` motor operations are working and physically verified
-on real hardware.
+[![License: GPL v3](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
+![Python](https://img.shields.io/badge/python-3.8%2B-blue)
+![Status](https://img.shields.io/badge/status-hardware--validated-brightgreen)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen)](https://github.com/tomaspakosta/k1c-cfs-klipper/issues)
+[![Support](https://img.shields.io/badge/support-PayPal-blue?logo=paypal)](https://paypal.me/pakostatomas)
 
-If you're technical: jump to [`docs/PROTOCOL.md`](docs/PROTOCOL.md) for the
-full wire protocol and [`examples/`](examples/) for working scripts.
+**Talk directly to a Creality CFS (multi-material filament box) from a K1C
+running a community Klipper stack — zero dependency on Creality's official,
+closed-source CFS firmware.**
+
+Discovery · addressing · sensors · RFID · `RETRUDE` · `EXTRUDE`
+— all working and physically verified on real hardware.
+
+</div>
+
+---
+
+### Contents
+
+[Why does this exist?](#why-does-this-exist) ·
+[What we found instead](#what-we-found-instead) ·
+[How it fits together](#how-it-fits-together) ·
+[Quick start](#quick-start) ·
+[Status / what's next](#status--whats-next) ·
+[Credits](#credits) ·
+[Safety](#safety) ·
+[Support](#support)
+
+If you're technical: jump straight to [`docs/PROTOCOL.md`](docs/PROTOCOL.md)
+for the full wire protocol and [`examples/`](examples/) for working scripts.
 If you're not: keep reading, the next section explains what this actually is
 and why it needed to be built at all.
 
@@ -62,26 +86,62 @@ pure read-only queries, and only moving on to commands that spin a motor
 once we were confident in what we were sending.
 
 **Confirmed working, live, on real hardware:**
-- ✅ Discovering the box and assigning it an address over the bus
-- ✅ Reading its status, firmware version, and filament sensors
-- ✅ Reading RFID data per slot (works, though most non-Creality-branded
-  filament spools don't have an RFID chip to read in the first place — that's
-  expected, not a bug)
-- ✅ **`RETRUDE`** — reeling filament back onto the spool
-- ✅ **`EXTRUDE`** — feeding filament from the spool, through the box, past
-  the internal buffer
 
-**Not yet covered:** driving filament the rest of the way to the toolhead,
-or operating the cutter — that needs the toolhead-side hardware reconnected,
-which is a separate, ongoing part of this project (see
-[Status / what's next](#status--whats-next)).
+| | Capability |
+|---|---|
+| ✅ | Discovering the box and assigning it an address over the bus |
+| ✅ | Reading status, firmware version, and filament sensors |
+| ✅ | Reading RFID data per slot *(most non-Creality-branded spools have no chip to read — expected, not a bug)* |
+| ✅ | **`RETRUDE`** — reeling filament back onto the spool |
+| ✅ | **`EXTRUDE`** — feeding filament from the spool, through the box, past the internal buffer |
+| ⏳ | Driving filament the rest of the way to the toolhead / operating the cutter — needs the toolhead-side hardware reconnected, see [Status / what's next](#status--whats-next) |
 
-## Physical setup
+## How it fits together
 
 The CFS box connects over **USB**, via a small USB↔RS485 adapter built into
 its cable (CH340/CH341 chip). Plug it into any spare USB-A port on the
 printer — on Linux, the kernel handles the rest automatically, no driver
 install needed. It shows up as `/dev/ttyUSB0` (or similar).
+
+```mermaid
+graph LR
+    Host["Host script<br/>(cfs_protocol.py)"] -->|USB, CH340/CH341<br/>230400 baud| Box["CFS box<br/>RS-485 controller"]
+    Box --> A["Slot A"]
+    Box --> B["Slot B"]
+    Box --> C["Slot C"]
+    Box --> D["Slot D"]
+    A & B & C & D --> Buffer["Spring buffer<br/>(20mm reserve)"]
+    Buffer -.->|not yet driven<br/>from here| Toolhead["Toolhead<br/>(cutter + sensor)"]
+
+    style Toolhead stroke-dasharray: 5 5
+```
+
+And this is the sequence that actually gets filament moving — the part that
+took the most trial and error to work out (full story in
+[`docs/PROTOCOL.md`](docs/PROTOCOL.md)):
+
+```mermaid
+sequenceDiagram
+    participant H as Host script
+    participant B as CFS box
+
+    H->>B: SET_BOX_MODE (IDLE)
+    B-->>H: OK
+    H->>B: CTRL_CONNECTION_MOTOR_ACTION (EXTRUDE)
+    Note right of B: connects the target slot<br/>to the shared feed path —<br/>the step that was missing<br/>in early attempts
+    B-->>H: OK
+    H->>B: TIGHTEN_UP_ENABLE
+    B-->>H: OK
+    H->>B: EXTRUDE_PROCESS (stage 0 → 4)
+    B-->>H: OK
+    loop poll stage 5
+        H->>B: EXTRUDE_PROCESS (stage 5)
+        B-->>H: live telemetry (motor running)
+    end
+    H->>B: TIGHTEN_UP_ENABLE (off)
+    H->>B: CTRL_CONNECTION_MOTOR_ACTION (STOP)
+    Note over H,B: filament now past the buffer ✅
+```
 
 ## Quick start
 
