@@ -127,8 +127,8 @@ once we were confident in what we were sending.
 | ✅ | Reading RFID data per slot *(most non-Creality-branded spools have no chip to read — expected, not a bug)* |
 | ✅ | **`RETRUDE`** — reeling filament back onto the spool |
 | ✅ | **`EXTRUDE`** — feeding filament from the spool, through the box, past the buffer, and (manually guided into the toolhead at the time, before the PTFE tube was connected) far enough to trigger Klipper's toolhead filament sensor — see the caveat in `docs/PROTOCOL.md` before assuming this was a fully automated feed |
-| ✅ | The cutter mechanism itself — hand-tested (not via G-code), confirmed it cleanly cuts filament when its lever is actuated |
-| ⏳ | An *automatic* feed through the now-connected PTFE tube (box→buffer→toolhead is physically one continuous path as of the last hardware pass, but not yet re-tested end-to-end without manual guidance), and driving the cutter via G-code instead of by hand — needs real `pre_cut_pos`/`cut_pos` coordinates for this machine first, see [Status / what's next](#status--whats-next) |
+| ✅ | The cutter's lever-actuated cut position — found by hand, then **confirmed reproducible with plain `G1` moves**: retreat and return reliably re-triggers it, no manual guidance needed for *that* step |
+| ⏳ | A full cut *macro* (retraction, multiple passes, safe travel, acceleration handling around the confirmed position) and an *automatic* feed through the now-connected PTFE tube re-tested end-to-end without manual guidance — see [Status / what's next](#status--whats-next) |
 
 ## How it fits together
 
@@ -146,9 +146,7 @@ graph LR
     Box --> D["Slot D"]
     A & B & C & D --> Buffer["Spring buffer<br/>(20mm reserve)"]
     Buffer --> Sensor["Toolhead filament sensor<br/>(reached, sensor confirmed)"]
-    Sensor -.->|G-code drive still pending -<br/>hand-tested OK, needs cut-position calibration| Cutter["Cutter (lever-actuated)<br/>toolhead motion, no protocol cmd"]
-
-    style Cutter stroke-dasharray: 5 5
+    Sensor --> Cutter["Cutter, lever-actuated<br/>X150/Y225 confirmed via G-code<br/>full cut macro still pending"]
 ```
 
 And this is the sequence that actually gets filament moving — the part that
@@ -204,29 +202,33 @@ top of each file if yours enumerates differently.
 This is **not** a Klipper extra (plugin) yet — it's a validated, working
 protocol client, meant as the foundation for one.
 
-Since the last update: the PTFE tube from box → buffer → toolhead is now
-connected as one continuous path, and the cutter mechanism was manually
-tested (pressed by hand, not via G-code) and confirmed working — it's
-**lever-actuated**: the toolhead's motion to the cut position is expected to
-mechanically press this lever to trigger the blade, rather than purely
+Since the last update: the CFS upgrade kit is now properly mounted (the
+earlier test setup was intentionally loose/temporary), the PTFE tube from
+box → buffer → toolhead is connected as one continuous path, and the cutter
+mechanism has been both hand-tested and **confirmed reproducible via pure
+G-code**. It's **lever-actuated**: the toolhead's motion to a specific
+position mechanically presses a lever to trigger the cut, rather than
 dragging filament across a stationary edge as originally assumed from
-external reference material. That assumption in `docs/PROTOCOL.md` has been
-corrected accordingly.
+external reference material for a different hardware revision — that
+assumption in `docs/PROTOCOL.md` has been corrected.
 
-The remaining hardware is being properly remounted via the official CFS
-upgrade kit (the test setup so far has been intentionally loose/temporary)
-before the next phase: measuring the real `pre_cut_pos`/`cut_pos`
-coordinates for this specific machine so the cut motion can be driven by
-G-code instead of by hand.
+The real cut position was found by jogging the toolhead by hand (via the
+printer's touchscreen, which preserves Klipper's position tracking — no
+steppers disabled) until the lever was visibly pressed, then reading the
+exact coordinates back from Klipper: **`X=150.0, Y=225.0`** on our unit —
+notably different from `X=42.0` in an older reference config for a
+different physical printer, which is exactly why this was worth measuring
+directly rather than assuming. Retreating and re-approaching that position
+purely via `G1` commands reliably re-triggers the lever every time.
 
 The plan from here:
 
-1. Remount hardware properly via the upgrade kit, then measure/calibrate
-   real cut-position coordinates for this machine.
-2. Drive the cut sequence via G-code once those coordinates are known —
-   carefully, since moving a real toolhead near an untested position close
-   to a blade is genuine physical risk, not something to guess at.
-3. Wrap all of this into a real Klipper extra with proper gcode commands and
+1. Build a proper cut macro around the confirmed position: pre-retraction,
+   multiple passes, safe travel back afterward, temporary acceleration
+   limits during the cut — see
+   [`FrederickAlt`'s cutter reference docs](https://github.com/FrederickAlt/CREALITY-K1-AND-K1-MAX-CFS-RETRUDE-BEFORE-CUT-MOD/blob/master/docs/unload-cutter-sensor-reference.md)
+   for the reference behavior to match.
+2. Wrap all of this into a real Klipper extra with proper gcode commands and
    background state polling.
 
 See [`docs/PROTOCOL.md`](docs/PROTOCOL.md) for what's documented about the
