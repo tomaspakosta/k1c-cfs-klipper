@@ -126,8 +126,9 @@ once we were confident in what we were sending.
 | ✅ | Reading status, firmware version, and filament sensors |
 | ✅ | Reading RFID data per slot *(most non-Creality-branded spools have no chip to read — expected, not a bug)* |
 | ✅ | **`RETRUDE`** — reeling filament back onto the spool |
-| ✅ | **`EXTRUDE`** — feeding filament from the spool, through the box, past the buffer, and (manually guided into the toolhead, PTFE tube not yet connected) far enough to trigger Klipper's toolhead filament sensor — see the caveat in `docs/PROTOCOL.md` before assuming this is a fully automated feed already |
-| ⏳ | A confirmed *automatic* box→PTFE→toolhead feed, and operating the cutter (pure toolhead motion, not a CFS protocol command — see `docs/PROTOCOL.md`) |
+| ✅ | **`EXTRUDE`** — feeding filament from the spool, through the box, past the buffer, and (manually guided into the toolhead at the time, before the PTFE tube was connected) far enough to trigger Klipper's toolhead filament sensor — see the caveat in `docs/PROTOCOL.md` before assuming this was a fully automated feed |
+| ✅ | The cutter mechanism itself — hand-tested (not via G-code), confirmed it cleanly cuts filament when its lever is actuated |
+| ⏳ | An *automatic* feed through the now-connected PTFE tube (box→buffer→toolhead is physically one continuous path as of the last hardware pass, but not yet re-tested end-to-end without manual guidance), and driving the cutter via G-code instead of by hand — needs real `pre_cut_pos`/`cut_pos` coordinates for this machine first, see [Status / what's next](#status--whats-next) |
 
 ## How it fits together
 
@@ -144,8 +145,8 @@ graph LR
     Box --> C["Slot C"]
     Box --> D["Slot D"]
     A & B & C & D --> Buffer["Spring buffer<br/>(20mm reserve)"]
-    Buffer -.->|no PTFE tube yet,<br/>manually guided in testing| Sensor["Toolhead filament sensor<br/>(reached, sensor confirmed)"]
-    Sensor -.->|cutter not wired<br/>up yet| Cutter["Cutter<br/>(toolhead motion, no protocol cmd)"]
+    Buffer --> Sensor["Toolhead filament sensor<br/>(reached, sensor confirmed)"]
+    Sensor -.->|G-code drive still pending -<br/>hand-tested OK, needs cut-position calibration| Cutter["Cutter (lever-actuated)<br/>toolhead motion, no protocol cmd"]
 
     style Cutter stroke-dasharray: 5 5
 ```
@@ -201,15 +202,35 @@ top of each file if yours enumerates differently.
 ## Status / what's next
 
 This is **not** a Klipper extra (plugin) yet — it's a validated, working
-protocol client, meant as the foundation for one. The plan:
+protocol client, meant as the foundation for one.
 
-1. Wrap this into a real Klipper extra with proper gcode commands and
+Since the last update: the PTFE tube from box → buffer → toolhead is now
+connected as one continuous path, and the cutter mechanism was manually
+tested (pressed by hand, not via G-code) and confirmed working — it's
+**lever-actuated**: the toolhead's motion to the cut position is expected to
+mechanically press this lever to trigger the blade, rather than purely
+dragging filament across a stationary edge as originally assumed from
+external reference material. That assumption in `docs/PROTOCOL.md` has been
+corrected accordingly.
+
+The remaining hardware is being properly remounted via the official CFS
+upgrade kit (the test setup so far has been intentionally loose/temporary)
+before the next phase: measuring the real `pre_cut_pos`/`cut_pos`
+coordinates for this specific machine so the cut motion can be driven by
+G-code instead of by hand.
+
+The plan from here:
+
+1. Remount hardware properly via the upgrade kit, then measure/calibrate
+   real cut-position coordinates for this machine.
+2. Drive the cut sequence via G-code once those coordinates are known —
+   carefully, since moving a real toolhead near an untested position close
+   to a blade is genuine physical risk, not something to guess at.
+3. Wrap all of this into a real Klipper extra with proper gcode commands and
    background state polling.
-2. Wire the cutter back up (currently unmounted on our test unit) and
-   implement the cut motion sequence — this turns out to be pure toolhead
-   G-code motion, not a CFS protocol command, so it doesn't block on
-   anything in this repo. See [`docs/PROTOCOL.md`](docs/PROTOCOL.md) for
-   what's documented about it so far.
+
+See [`docs/PROTOCOL.md`](docs/PROTOCOL.md) for what's documented about the
+cutter mechanism so far.
 
 Contributions, corrections, and hardware validation on other CFS/board
 revisions are welcome — open an issue.
