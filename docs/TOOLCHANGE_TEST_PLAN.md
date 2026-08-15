@@ -182,9 +182,23 @@ Two things, found together:
    properly finished, which is apparently a precondition for switching
    slots at all.**
 
-Not yet re-verified on slots B/C specifically (only D so far), and
-`BOX_NOZZLE_CLEAN` plus stage 7's exact 3rd byte remain unconfirmed
-guesses - but neither blocked this result. Move to phase 3.
+**Confirmed on a second slot the same session: `EXTRUDE --slot B` also
+worked** — connection bitmask read back `0x02` (B) after, `GET_BOX_STATE`
+came back clean (`0x00`), `filament_detected` true. Material physically
+reached past the toolhead sensor into the extruder gear itself this
+time (a brief red LED blip during that handoff cleared on its own to
+white within seconds - not a real fault, just a normal part of the
+load). Not yet independently re-verified on slot C, but two different
+slots switching cleanly in the same session is strong confirmation
+this generalizes, not a fluke specific to D. **Important operational
+lesson learned live this session: always CUT before RETRUDE if there's
+filament past the cutter (toward the toolhead) — retruding without
+cutting first can only pull back the box-side portion and left a stray
+strand stuck at the toolhead once, which then snapped when retruded
+anyway. Cut → retrude fully into the box → only then select a new slot
+and extrude.** `BOX_NOZZLE_CLEAN` plus stage 7's exact 3rd payload byte
+remain unconfirmed guesses - neither blocked either result. Move to
+phase 3.
 
 ## Phase 3 — turn it into a macro
 
