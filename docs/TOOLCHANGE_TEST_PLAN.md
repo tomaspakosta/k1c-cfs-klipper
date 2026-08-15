@@ -196,27 +196,40 @@ on its own to white within seconds - not a real fault, just a normal
 part of the load). Because it went in that deep, the box-side motor
 alone couldn't pull it back out on retrude - **manually releasing the
 toolhead extruder's idler lever was needed before it would retract
-cleanly into the box.** Worth building into a future macro (e.g. a
-small deliberate reverse/relieve move before cutting) so this doesn't
-need a manual step every time.
+cleanly into the box.**
+
+**Fixed for C: a small toolhead-side retraction before cutting.** At
+the cut position, before retreating: `M83` then `G1 E-15 F300` (pull
+the tip back out of the extruder's own grip), *then* retreat and run
+`RETRUDE` as normal. Tested live on slot C - retracted "krásně čistě"
+(cleanly), no manual lever assist needed. **Worth building into
+`CFS_TOOLCHANGE`/a future unload macro as a standard step**, not just
+an emergency fix.
 
 **Important operational lessons learned live this session:**
 1. Always CUT before RETRUDE if there's filament past the cutter
    (toward the toolhead) — retruding without cutting first can only
    pull back the box-side portion and left a stray strand stuck at the
    toolhead once, which then snapped when retruded anyway. Cut →
-   retrude fully into the box → only then select a new slot and
-   extrude.
-2. If filament fed deep enough to reach the extruder gear (not just
-   the toolhead sensor), retrude may need a manual assist at the
-   extruder's idler lever - the box motor's pull alone isn't always
-   enough to overcome the extruder's own grip.
+   (toolhead pre-retract, see below) → retrude fully into the box →
+   only then select a new slot and extrude.
+2. Add a toolhead-side pre-retract (`M83` + `G1 E-15 F300`) right
+   after cutting, before the box-side retrude - avoids needing a manual
+   extruder-lever assist for filament that fed in deep.
 3. If the box stops responding to RS-485 at all and a normal
    power-cycle doesn't fix it, check the box's own physical
    temperature/humidity display - if that's blank too, the box itself
    isn't properly booted, not just disconnected from the bus. A longer,
    more deliberate power-cycle (wait for that display to come back)
    resolved it.
+
+**Open question, not yet resolved:** after the slot-C retrude above,
+the box stopped responding to RS-485 again (same silent pattern as
+lesson 3), and `filament_switch_sensor filament_sensor_2` still read
+`filament_detected: true` right afterward despite the retrude feeling
+clean - unclear if that's a stale/pre-update sensor read or filament
+genuinely still sitting at the sensor. Not yet physically confirmed
+either way - check next session.
 
 `BOX_NOZZLE_CLEAN` plus stage 7's exact 3rd payload byte remain
 unconfirmed guesses - neither blocked any of these results. Move to
