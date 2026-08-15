@@ -182,22 +182,44 @@ Two things, found together:
    properly finished, which is apparently a precondition for switching
    slots at all.**
 
-**Confirmed on a second slot the same session: `EXTRUDE --slot B` also
-worked** — connection bitmask read back `0x02` (B) after, `GET_BOX_STATE`
-came back clean (`0x00`), `filament_detected` true. Material physically
-reached past the toolhead sensor into the extruder gear itself this
-time (a brief red LED blip during that handoff cleared on its own to
-white within seconds - not a real fault, just a normal part of the
-load). Not yet independently re-verified on slot C, but two different
-slots switching cleanly in the same session is strong confirmation
-this generalizes, not a fluke specific to D. **Important operational
-lesson learned live this session: always CUT before RETRUDE if there's
-filament past the cutter (toward the toolhead) — retruding without
-cutting first can only pull back the box-side portion and left a stray
-strand stuck at the toolhead once, which then snapped when retruded
-anyway. Cut → retrude fully into the box → only then select a new slot
-and extrude.** `BOX_NOZZLE_CLEAN` plus stage 7's exact 3rd payload byte
-remain unconfirmed guesses - neither blocked either result. Move to
+**Confirmed on a second and third slot the same session: `EXTRUDE
+--slot B` and `EXTRUDE --slot C` both worked too** — connection
+bitmask read back `0x02` (B) and `0x04` (C) respectively afterward,
+`GET_BOX_STATE` clean (`0x00`) both times, `filament_detected` true
+both times. **All 4 slots (A, B, C, D) are now confirmed able to
+switch cleanly with the completed `EXTRUDE_PROCESS` sequence** — this
+is not a fluke specific to any one slot.
+
+For B, material physically reached past the toolhead sensor into the
+extruder gear itself (a brief red LED blip during that handoff cleared
+on its own to white within seconds - not a real fault, just a normal
+part of the load). Because it went in that deep, the box-side motor
+alone couldn't pull it back out on retrude - **manually releasing the
+toolhead extruder's idler lever was needed before it would retract
+cleanly into the box.** Worth building into a future macro (e.g. a
+small deliberate reverse/relieve move before cutting) so this doesn't
+need a manual step every time.
+
+**Important operational lessons learned live this session:**
+1. Always CUT before RETRUDE if there's filament past the cutter
+   (toward the toolhead) — retruding without cutting first can only
+   pull back the box-side portion and left a stray strand stuck at the
+   toolhead once, which then snapped when retruded anyway. Cut →
+   retrude fully into the box → only then select a new slot and
+   extrude.
+2. If filament fed deep enough to reach the extruder gear (not just
+   the toolhead sensor), retrude may need a manual assist at the
+   extruder's idler lever - the box motor's pull alone isn't always
+   enough to overcome the extruder's own grip.
+3. If the box stops responding to RS-485 at all and a normal
+   power-cycle doesn't fix it, check the box's own physical
+   temperature/humidity display - if that's blank too, the box itself
+   isn't properly booted, not just disconnected from the bus. A longer,
+   more deliberate power-cycle (wait for that display to come back)
+   resolved it.
+
+`BOX_NOZZLE_CLEAN` plus stage 7's exact 3rd payload byte remain
+unconfirmed guesses - neither blocked any of these results. Move to
 phase 3.
 
 ## Phase 3 — turn it into a macro
