@@ -170,6 +170,8 @@ def do_retrude(args):
     with CFSClient(args.port) as cfs:
         print(f"Using port: {cfs.port}")
         slot = SLOT_BYTES[slot_letter]
+        cfs.set_pre_loading(BOX_ADDR, "CLOSE")  # reset to known state, see FINDINGS.md
+        time.sleep(0.2)
         cfs.set_box_mode_idle(BOX_ADDR)
         time.sleep(0.3)
         cfs.retrude_stage(BOX_ADDR, slot, 0x00)
@@ -205,6 +207,8 @@ def do_extrude(args):
     with CFSClient(args.port) as cfs:
         print(f"Using port: {cfs.port}")
         slot = SLOT_BYTES[slot_letter]
+        cfs.set_pre_loading(BOX_ADDR, "CLOSE")  # reset to known state, see FINDINGS.md
+        time.sleep(0.2)
         cfs.set_box_mode_idle(BOX_ADDR)
         time.sleep(0.3)
         cfs.ctrl_connection_motor(BOX_ADDR, action=0x01)

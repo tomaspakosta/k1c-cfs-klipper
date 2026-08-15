@@ -173,15 +173,33 @@ grounded next improvement rather than another guess.
   Don't assume any of the above for your own hardware without checking — hand-test the mechanism and measure the real position the same way we did. If you're chasing the full pipeline and don't have a cutter mounted/calibrated yet, that's fine: it doesn't block anything else documented on this page.
 - `SET_PRE_LOADING` looked, from its one available real example and its name, like it should be "the" command to trigger feeding. In practice, sending it (with what we thought was a slot mask + enable byte) sometimes produced a brief, ambiguous state blip and sometimes nothing measurable at all — never a clear, repeatable "motor ran and moved material" result the way `EXTRUDE_PROCESS` (once fixed) and `RETRUDE_PROCESS` did.
 
-  **Resolved** (credit: `gitstonelabs/creality-cfs-klipper`, which decoded this from the compiled stock firmware): the second byte isn't an enable flag at all, it's a `phase`:
+  **Resolved, and corrected again since:** the second byte isn't an
+  enable flag, it's an `action`. Our first correction (credit:
+  `gitstonelabs/creality-cfs-klipper`, from the compiled stock firmware)
+  named it "phase" with `ARM=0x00`/`DISARM=0x01`/`SLOT_REARM=0x02` -
+  functionally on the right track, but with the **direction backwards**
+  and **a 4th value neither of us had found**. Examining Creality's own
+  official firmware directly (see `docs/TOOLCHANGE_TEST_PLAN.md` for how)
+  gave the real, self-consistent picture:
 
-  | Phase | Byte | Meaning |
+  | Action | Byte | Meaning |
   |---|---:|---|
-  | `ARM` | `0x00` | |
-  | `DISARM` | `0x01` | |
-  | `SLOT_REARM` | `0x02` | Actually re-runs the physical preload sequence for the given slot mask — a genuinely slow, blocking operation (~38s per their timing notes). |
+  | `CLOSE` | `0x00` | **Disable** pre-loading (the official code's own name/comment — the opposite of "ARM") |
+  | `OPEN` | `0x01` | **Enable** pre-loading (opposite of "DISARM") |
+  | `RUN` | `0x02` | Force-run the physical preload sequence for the given slot mask — a genuinely slow, blocking operation (timeout scales with how many slots are in the mask; matches the gitstonelabs' ~38s/slot timing note) |
+  | `TIGHT` | `0x03` | Force-tighten — not documented anywhere we'd seen before this |
 
-  Our earlier tests only ever sent phase `0x00`/`0x01` (assuming they meant off/on) — we never tried `0x02`, which is apparently the one that actually moves anything. The real captured reference frame we validated against early in this project, `data=[0x0F, 0x01]`, decodes as "DISARM all slots" in this corrected model — not "enable", which is exactly why it never produced motor movement for us. This also confirms our earlier guess was on the right track: it *is* closer to a background arm/disarm toggle than a direct trigger, just with a third phase we hadn't found yet. **Untested by us**: phase `0x02` specifically, given the ~38s blocking behavior it's worth trying supervised, not blind.
+  So `0x00`/`0x01` really are a background toggle (just labeled
+  backwards from our first guess), `0x02` is the one that actually
+  moves anything, confirmed to be called with the full slot mask
+  (`0x0F`) as a "reset to known state" step at the very start of the
+  real official toolchange sequence (`CLOSE`, i.e. `[0x0F, 0x00]`) -
+  worth doing the same before our own toolchange sequences. `0x03`
+  (`TIGHT`) remains untested by us. Real captured reference frame from
+  earlier in this project, `data=[0x0F, 0x01]`, now decodes as "OPEN
+  (enable) all slots" - a plausible background-toggle call, not
+  something that should have produced visible motor movement, which
+  matches what we saw.
 
 ### What we'd been missing entirely — the real completion sequence
 

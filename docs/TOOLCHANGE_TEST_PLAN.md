@@ -272,6 +272,29 @@ loaded into a real running Klipper - all testing so far, including this
 attempt, used `cfs_cli.py` standalone plus manual G-code calls, not the
 actual Klipper extra or a real `CFS_TOOLCHANGE` macro call.
 
+**Pre-test improvements added, not yet live-tested (2026-08-16, research
+between physical sessions):**
+- `SET_PRE_LOADING` corrected and extended - see `docs/PROTOCOL.md`.
+  `cfs_cli.py`'s `retrude`/`extrude` and the Klipper extra's
+  `CFS_RETRUDE`/`CFS_EXTRUDE` now send a `CLOSE` (disable, all slots)
+  reset as their first step, matching the real official sequence's own
+  "reset to known state" call at the start of every toolchange.
+- Community research (Bambu AMS / Prusa MMU docs) confirms the general
+  approach (tip-forming, then retract) and adds two safety/fallback
+  notes now in `docs/MANUAL.md`'s troubleshooting section: never pull
+  filament by hand while a motor might still be running (risks
+  stripping gear teeth), and a "hot pull" (cool the hotend to
+  ~90-120°C before pulling) as a manual fallback if the automated
+  tip-form sequence still doesn't clear a jam.
+- **Not yet implemented**, worth adding to the eventual `CFS_TOOLCHANGE`
+  macro: the real official sequence wraps retrude+extrude in a bounded
+  retry loop (give retrude up to 2 attempts before giving up entirely;
+  once retrude succeeds, give the overall sequence up to 4 attempts
+  total, with a 2s pause and a toolhead reposition between retries).
+  `macros/toolchange_draft.cfg` currently does not retry at all - a
+  single failure at any step just stops. This is worth adding once the
+  individual pieces are solid, not before.
+
 Only after phase 2 has worked cleanly at least once by hand:
 
 1. Add a `[save_variables]` section to `printer.cfg` if you don't already

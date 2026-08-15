@@ -57,6 +57,7 @@ FN = {
     "CTRL_CONNECTION_MOTOR_ACTION": 0x07,
     "GET_FILAMENT_SENSOR_STATE": 0x08,
     "GET_BOX_STATE": 0x0A,
+    "SET_PRE_LOADING": 0x0D,
     "TIGHTEN_UP_ENABLE": 0x0F,
     "EXTRUDE_PROCESS": 0x10,
     "RETRUDE_PROCESS": 0x11,
@@ -175,6 +176,11 @@ class CrealityCFS:
                                 desc="CFS_RETRUDE SLOT=<A|B|C|D> - reel filament back onto the spool")
         gcode.register_command("CFS_EXTRUDE", self.cmd_CFS_EXTRUDE,
                                 desc="CFS_EXTRUDE SLOT=<A|B|C|D> [POLLS=<n>] - feed filament from the spool")
+        gcode.register_command("CFS_SET_PRE_LOADING", self.cmd_CFS_SET_PRE_LOADING,
+                                desc="CFS_SET_PRE_LOADING ACTION=<CLOSE|OPEN|RUN|TIGHT> [MASK=<0-15>] "
+                                     "- mostly for diagnostics; CLOSE is run automatically as a reset "
+                                     "step at the start of CFS_RETRUDE/CFS_EXTRUDE. RUN/TIGHT are slow "
+                                     "(~38s/slot) and untested by us - use supervised.")
 
     # -- low level transport -------------------------------------------
 
@@ -245,6 +251,29 @@ class CrealityCFS:
 
     # -- gcode commands -----------------------------------------------
 
+    def _reset_pre_loading(self):
+        """CLOSE (disable) pre-loading on all 4 slots - a cheap, fast,
+        non-motor call the real official sequence sends as a "reset to
+        known state" step before every toolchange (see FINDINGS.md in
+        the private research log). Best-effort - failures here shouldn't
+        block the actual retrude/extrude that follows."""
+        try:
+            self._send(self.box_addr, 0xFF, FN["SET_PRE_LOADING"], bytes([0x0F, 0x00]))
+        except Exception:
+            logging.exception("creality_cfs: pre-loading reset failed (non-fatal)")
+
+    def cmd_CFS_SET_PRE_LOADING(self, gcmd):
+        action = gcmd.get("ACTION", "CLOSE").upper()
+        action_map = {"CLOSE": 0x00, "OPEN": 0x01, "RUN": 0x02, "TIGHT": 0x03}
+        if action not in action_map:
+            raise gcmd.error("ACTION must be one of CLOSE, OPEN, RUN, TIGHT")
+        mask = gcmd.get_int("MASK", 0x0F, minval=0, maxval=15)
+        timeout = 45.0 if action in ("RUN", "TIGHT") else 2.0
+        resp = self._send(self.box_addr, 0xFF, FN["SET_PRE_LOADING"],
+                           bytes([mask, action_map[action]]), timeout=timeout)
+        gcmd.respond_info("CFS_SET_PRE_LOADING ACTION=%s MASK=%#04x: %s" % (
+            action, mask, resp.hex() if resp else "(no reply)"))
+
     def cmd_CFS_STATUS(self, gcmd):
         if not self.addressed:
             gcmd.respond_info("CFS box not addressed (no response at klippy:connect)")
@@ -308,6 +337,7 @@ class CrealityCFS:
             raise gcmd.error("SLOT must be one of A, B, C, D")
         slot = SLOT_BYTES[slot_letter]
 
+        self._reset_pre_loading()
         self._send(self.box_addr, 0xFF, FN["SET_BOX_MODE"], bytes([0x00, 0x01]))
         time.sleep(0.3)
         self._send(self.box_addr, 0xFF, FN["RETRUDE_PROCESS"], bytes([slot, 0x00]))
@@ -368,6 +398,8 @@ class CrealityCFS:
         if not all(axis in homed for axis in "xyz"):
             raise gcmd.error("CFS_EXTRUDE: home the printer first (G28) - "
                               "refusing to move to the extrude position unhomed")
+
+        self._reset_pre_loading()
 
         # Step 1: error-clear-equivalent (see note above - best effort only)
         status = self._send(self.box_addr, 0xFF, FN["GET_BOX_STATE"])

@@ -253,6 +253,23 @@ class CFSClient:
             return resp[5]
         return None
 
+    def set_pre_loading(self, addr: int, action: str, slot_mask: int = SLOT_ALL) -> bytes:
+        """action: "CLOSE" (disable), "OPEN" (enable), "RUN" (force-run
+        the physical preload sequence - slow, ~38s/slot, blocking - use
+        a long timeout if you call this with RUN), or "TIGHT"
+        (force-tighten, untested by us). Byte values and names confirmed
+        by examining the real official firmware (see FINDINGS.md in the
+        private research log) - corrects an earlier, backwards-labeled
+        guess (credited to gitstonelabs) that called 0x00/0x01
+        "ARM"/"DISARM"; they're really CLOSE/OPEN, meaning opposite of
+        what those names implied. slot_mask defaults to all 4 slots
+        (SLOT_ALL) - the real official sequence sends CLOSE with the full
+        mask as a "reset to known state" step before every toolchange."""
+        action_byte = {"CLOSE": 0x00, "OPEN": 0x01, "RUN": 0x02, "TIGHT": 0x03}[action]
+        timeout = 45.0 if action in ("RUN", "TIGHT") else 2.0
+        return self.send(addr, 0xFF, FN["SET_PRE_LOADING"],
+                          bytes([slot_mask, action_byte]), timeout=timeout)
+
     def set_box_mode(self, addr: int, mode: str, slot: int = 0x00) -> bytes:
         """mode: "PRINT" or "IDLE". slot: a single SLOT_A..SLOT_D bitmask,
         or 0x00 (the default) for "no slot" - the generic form used to

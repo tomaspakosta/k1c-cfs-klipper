@@ -157,6 +157,26 @@ own `[creality_cfs]` extra if that's already loaded and connected).
 codes table in `docs/PROTOCOL.md` — if you hit one we haven't seen and
 documented, that's valuable to report in an issue.
 
+**`RETRUDE` jams with filament stuck in the toolhead extruder's own
+drive gear** (needs a manual lever release, box reports
+`RETRUDE_ERR2`/`RETRUDE_ERR7`). This can happen with filament that was
+fed in deep by a completed `EXTRUDE`. `CFS_RETRUDE`/`cfs_cli.py retrude`
+now run a "tip-forming" unload sequence automatically to avoid this
+(see `docs/PROTOCOL.md`'s "RETRUDE — the tip-forming unload sequence")
+— if you still hit it:
+- **Never pull the filament by hand while a motor might still be
+  running** (box or toolhead) — risks stripping the extruder's drive
+  gear teeth. Let any in-progress command finish or time out first.
+- Release the toolhead extruder's idler lever (disengages the drive
+  gear) before pulling by hand — same technique used on Bambu AMS /
+  Prusa MMU for exactly this failure mode.
+- If pulling by hand still doesn't work even with the lever released,
+  a "hot pull" can help: with the hotend still warm, let it cool toward
+  ~90-120°C (PLA) / ~140-170°C (PETG/ABS) before pulling — filament
+  that's firm-but-not-cold drags out cleanly, where fully molten
+  filament can string/blob and re-catch, and fully cold filament can
+  shear off instead of pulling free.
+
 **Everything else** — see [Credits](../README.md#credits) in the main
 README for the other projects this one builds on; if something looks like
 a protocol difference rather than a bug here, one of those may have
