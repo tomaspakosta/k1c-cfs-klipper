@@ -237,6 +237,20 @@ phase 3.
 
 ## Phase 3 — turn it into a macro
 
+**Status: a first manual end-to-end run (cut → toolhead pre-retract →
+retrude A → extrude B) was attempted and hit `RETRUDE_ERR2` ("failed
+to exit connections") at the retrude step** — the toolhead sensor read
+clear, so this wasn't a toolhead-side snag; the likely cause (per
+physical inspection at the time) was a tangled/stuck spool on slot A,
+not a protocol or box problem. Not yet re-attempted with a fresh spool.
+The individual pieces (cut, pre-retract, retrude, extrude, slot
+switching) all remain independently confirmed working - this was a
+one-off physical snag on this particular attempt, not a new protocol
+issue. Also note: `klipper_extra/creality_cfs.py` has still never been
+loaded into a real running Klipper - all testing so far, including this
+attempt, used `cfs_cli.py` standalone plus manual G-code calls, not the
+actual Klipper extra or a real `CFS_TOOLCHANGE` macro call.
+
 Only after phase 2 has worked cleanly at least once by hand:
 
 1. Add a `[save_variables]` section to `printer.cfg` if you don't already
