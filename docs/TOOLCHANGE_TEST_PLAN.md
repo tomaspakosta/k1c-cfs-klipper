@@ -342,6 +342,25 @@ Only after phase 2 has worked cleanly at least once by hand:
 
 ## Phase 4 — flush and T0-T3 (further out, more speculative)
 
+**A first standalone `CFS_FLUSH` test (2026-08-16, live) found the
+purge position and hit a real jam.** `X150/Y225` - the position we'd
+earlier (incorrectly) called the cutter, before recalibrating the
+actual cutter to `X36/Y227` - turned out to be the toolhead's purge
+station. Confirmed the position works and **Z height matters a lot
+there** (too low collides the mechanism with the bed; ~33mm confirmed
+safe on our unit). The purge itself (slot A loaded, ~140mm total in an
+80mm+60mm split at F360, matching `flush_draft.cfg`'s defaults) flowed
+cleanly through the first 80mm, then **jammed completely partway
+through the second cycle** - the extruder motor audibly
+clicked/skipped against a small fragment of material stuck inside,
+needed a manual push to clear. Real, live confirmation of that
+macro's own "no clog detection at all" warning - not a theoretical
+concern. Klipper's `toolhead.stalls` counter had also been climbing
+steadily across the whole session (61→82→135) even before this
+specific jam - worth watching as an early sign, and worth adding a
+stalls-delta (or `MEASURING_WHEEL`-based) check between purge cycles
+before trusting this macro unsupervised.
+
 Only after phase 3's swap-only macro is confirmed working repeatedly:
 
 1. `macros/flush_draft.cfg`'s `CFS_FLUSH` is the **least validated piece
