@@ -245,6 +245,14 @@ gets no reply or a non-OK status, instead of assuming failure. Second
 run confirmed the fix: same clean automatic result, correctly
 reported.)
 
+**Then confirmed on slot B too** - the specific slot that previously
+needed a manual idler-lever release every time (material fed in deep
+enough to reach the extruder's own drive gear). Same result: retracted
+fully automatically, no manual assist, script correctly reported
+"confirmed clear". **Three consecutive successes (2× A, 1× B including
+the previously-worst case) - high confidence this is a real, general
+fix, not a fluke.**
+
 **Important operational lessons learned live this session:**
 1. Always CUT before RETRUDE if there's filament past the cutter
    (toward the toolhead) — retruding without cutting first can only
