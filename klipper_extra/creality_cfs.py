@@ -36,6 +36,9 @@
 #   extrude_pos_x: 148.0
 #   extrude_pos_y: 225.3
 #   extrude_pos_z: 30.0
+#   # optional, name of your real toolhead [filament_switch_sensor],
+#   # used by CFS_RETRUDE's tip-form unload sequence:
+#   toolhead_sensor_name: filament_sensor_2
 
 import logging
 import time
@@ -65,6 +68,15 @@ FN = {
 
 SLOT_BYTES = {"A": 0x01, "B": 0x02, "C": 0x04, "D": 0x08}
 BROADCAST_ALL_BOXES = 0xFE
+
+# "Tip-forming" toolhead move sequence for a clean, non-jamming unload -
+# see the identical table (and its full rationale) in cfs_protocol.py's
+# TIP_FORM_STEPS. Duplicated here rather than imported since this file
+# is meant to be self-contained when copied into klippy/extras/.
+TIP_FORM_STEPS = [
+    (0.5, 600), (-5, 600), (2.5, 600), (-1.25, 600), (1.75, 600), (1, 60),
+    (-15, 90), (-15, 90), (-15, 500), (-15, 500), (-15, 500), (-15, 500),
+]
 
 
 class CFSSlotSensor:
@@ -130,6 +142,12 @@ class CrealityCFS:
         self.extrude_pos_y = config.getfloat("extrude_pos_y", 225.3)
         self.extrude_pos_z = config.getfloat("extrude_pos_z", 30.0)
         self.extrude_move_speed = config.getfloat("extrude_move_speed", 3600.0, above=0.0)
+
+        # Name of the real toolhead filament sensor (a plain Klipper
+        # [filament_switch_sensor], NOT one of this extra's own virtual
+        # CFS_A..CFS_D sensors) - used by the tip-form unload sequence in
+        # cmd_CFS_RETRUDE to know when it's actually safe to stop.
+        self.toolhead_sensor_name = config.get("toolhead_sensor_name", "filament_sensor_2")
 
         self.ser = None
         self.addressed = False
@@ -238,6 +256,52 @@ class CrealityCFS:
         else:
             gcmd.respond_info("CFS: no status polled yet")
 
+    def _toolhead_filament_detected(self):
+        sensor = self.printer.lookup_object(
+            "filament_switch_sensor %s" % self.toolhead_sensor_name, None)
+        if sensor is None:
+            return None
+        return sensor.get_status(self.reactor.monotonic())["filament_detected"]
+
+    def _retrude_with_tip_form(self, gcmd):
+        # UNTESTED (as of this writing) reimplementation of the real
+        # official firmware's unload sequence - see TIP_FORM_STEPS above
+        # and FINDINGS.md in the private research log for where this came
+        # from and why: a single box-side RETRUDE_PROCESS call (what this
+        # repo did before) can leave filament jammed in the toolhead
+        # extruder's own drive gear, needing a manual lever release -
+        # confirmed live, see docs/TOOLCHANGE_TEST_PLAN.md.
+        #
+        # First "wiggles" the extruder a small net distance to re-melt and
+        # re-shape the filament tip into a smooth taper - a blobby/snagged
+        # tip is what catches in the gear on the way out - then does the
+        # real retraction in -15mm chunks, checking in with the box (a
+        # generic, no-specific-slot RETRUDE_PROCESS call) and the toolhead
+        # sensor between chunks so it can stop as soon as filament is
+        # confirmed clear.
+        self.gcode.run_script_from_command("M83")
+        for dist, speed in TIP_FORM_STEPS:
+            if dist <= -10:
+                resp = self._send(self.box_addr, 0xFF, FN["RETRUDE_PROCESS"], bytes([0x00, 0x00]))
+                status = resp[3] if len(resp) >= 4 else None
+                if status is None:
+                    gcmd.respond_info("CFS_RETRUDE: no reply from box mid-unload, "
+                                       "stopping - check physically")
+                    return False
+                if status != 0x00:
+                    self._send(self.box_addr, 0xFF, FN["SET_BOX_MODE"], bytes([0x00, 0x01]))
+                    detected = self._toolhead_filament_detected()
+                    if detected is False:
+                        gcmd.respond_info("CFS_RETRUDE: toolhead sensor clear, "
+                                           "unload complete (stopped early)")
+                        return True
+                    # Sensor still sees filament (or no sensor configured) -
+                    # keep going with the remaining steps.
+            self.gcode.run_script_from_command("G0 E%.2f F%.0f" % (dist, speed))
+            self.gcode.run_script_from_command("M400")
+        detected = self._toolhead_filament_detected()
+        return detected is False
+
     def cmd_CFS_RETRUDE(self, gcmd):
         slot_letter = gcmd.get("SLOT", "A").upper()
         if slot_letter not in SLOT_BYTES:
@@ -249,7 +313,10 @@ class CrealityCFS:
         self._send(self.box_addr, 0xFF, FN["RETRUDE_PROCESS"], bytes([slot, 0x00]))
         time.sleep(0.5)
         self._send(self.box_addr, 0xFF, FN["RETRUDE_PROCESS"], bytes([slot, 0x01]))
-        gcmd.respond_info("CFS_RETRUDE slot=%s sent" % slot_letter)
+
+        ok = self._retrude_with_tip_form(gcmd)
+        gcmd.respond_info("CFS_RETRUDE slot=%s complete (tip-form unload %s)" % (
+            slot_letter, "confirmed clear" if ok else "did NOT confirm clear - check physically"))
 
     def cmd_CFS_EXTRUDE(self, gcmd):
         # UNTESTED CHANGE (not yet run live - see FINDINGS.md in the private

@@ -198,42 +198,63 @@ alone couldn't pull it back out on retrude - **manually releasing the
 toolhead extruder's idler lever was needed before it would retract
 cleanly into the box.**
 
-**Fixed for C: a small toolhead-side retraction before cutting.** At
-the cut position, before retreating: `M83` then `G1 E-15 F300` (pull
-the tip back out of the extruder's own grip), *then* retreat and run
-`RETRUDE` as normal. Tested live on slot C - retracted "krásně čistě"
-(cleanly), no manual lever assist needed. **Worth building into
-`CFS_TOOLCHANGE`/a future unload macro as a standard step**, not just
-an emergency fix.
+**First fix tried: a small toolhead-side retraction before cutting.**
+`M83` + `G1 E-15 F300` right after cutting, before the box-side
+retrude. Worked once on slot C. **Turned out not to be reliable** - the
+next session, the same `-15mm` pre-retract (and separately, a
+forward-purge variant) both still needed a manual idler-lever release
+on slot A, and a plain retrude-with-sensor-monitoring test showed the
+toolhead sensor never moving at all for 24+ seconds - a hard stall, not
+a slow jam. **Superseded by the tip-forming sequence below - don't use
+this `-15mm` trick on its own.**
+
+**🎯 The real fix: a tip-forming unload sequence, found the same way
+the stage 6/7 completion was (examining Creality's official firmware).**
+Before `RETRUDE_PROCESS`, the real sequence "wiggles" the extruder a
+small net distance (re-melts and re-shapes the filament tip into a
+smooth taper - a blobby/snagged tip is what catches in the drive gear),
+*then* does the real retraction in `-15mm` chunks (not one `-15mm` -
+**six** of them, `-90mm` total), checking in with the box between each
+chunk and stopping early once the toolhead sensor confirms clear. Full
+move table and rationale in `docs/PROTOCOL.md`'s "RETRUDE — the
+tip-forming unload sequence". Implemented in `cfs_protocol.py`
+(`TIP_FORM_STEPS`), `cfs_cli.py` (`retrude_with_tip_form()`, wired into
+`do_retrude()`), and `klipper_extra/creality_cfs.py` (built into
+`CFS_RETRUDE` itself). **Not yet tested live** - next session's first
+priority once a working spool is back in slot A (see below).
 
 **Important operational lessons learned live this session:**
 1. Always CUT before RETRUDE if there's filament past the cutter
    (toward the toolhead) — retruding without cutting first can only
    pull back the box-side portion and left a stray strand stuck at the
    toolhead once, which then snapped when retruded anyway. Cut →
-   (toolhead pre-retract, see below) → retrude fully into the box →
-   only then select a new slot and extrude.
-2. Add a toolhead-side pre-retract (`M83` + `G1 E-15 F300`) right
-   after cutting, before the box-side retrude - avoids needing a manual
-   extruder-lever assist for filament that fed in deep.
-3. If the box stops responding to RS-485 at all and a normal
+   retrude fully into the box (now includes the tip-forming sequence
+   automatically) → only then select a new slot and extrude.
+2. If the box stops responding to RS-485 at all and a normal
    power-cycle doesn't fix it, check the box's own physical
    temperature/humidity display - if that's blank too, the box itself
-   isn't properly booted, not just disconnected from the bus. A longer,
-   more deliberate power-cycle (wait for that display to come back)
-   resolved it.
+   isn't properly booted, not just disconnected from the bus. If the
+   display IS showing normally and it's still not responding, try power
+   cycling the USB-RS485 adapter and the box **simultaneously** -
+   cycling them one at a time, in sequence, didn't work; doing both at
+   once did.
+3. **Resolved** (was an open question): a stray `filament_detected:
+   true` reading right after what felt like a clean retrude turned out
+   to be real, not stale - a short (~2cm) leftover stub of filament was
+   physically sitting in the toolhead past the sensor, left over from
+   the cut. Worth a brief pause + re-check after any retrude rather
+   than trusting the sensor read from the instant the command returns.
 
-**Open question, not yet resolved:** after the slot-C retrude above,
-the box stopped responding to RS-485 again (same silent pattern as
-lesson 3), and `filament_switch_sensor filament_sensor_2` still read
-`filament_detected: true` right afterward despite the retrude feeling
-clean - unclear if that's a stale/pre-update sensor read or filament
-genuinely still sitting at the sensor. Not yet physically confirmed
-either way - check next session.
+**A first end-to-end attempt (cut → pre-retract → retrude A → extrude
+B) hit a real, hard stall on the retrude step** - `RETRUDE_ERR2`
+("failed to exit connections"), toolhead sensor never moved at all.
+Likely cause per physical inspection: a tangled/stuck spool on slot A,
+not a protocol issue - a fresh spool is needed before retesting. Not
+yet re-attempted.
 
 `BOX_NOZZLE_CLEAN` plus stage 7's exact 3rd payload byte remain
-unconfirmed guesses - neither blocked any of these results. Move to
-phase 3.
+unconfirmed guesses - neither has blocked any result so far. Move to
+phase 3 once the tip-forming unload is confirmed live.
 
 ## Phase 3 — turn it into a macro
 

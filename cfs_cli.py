@@ -25,9 +25,10 @@ import argparse
 import json
 import sys
 import time
+import urllib.parse
 import urllib.request
 
-from cfs_protocol import CFSClient, SLOT_A, SLOT_B, SLOT_C, SLOT_D
+from cfs_protocol import CFSClient, SLOT_A, SLOT_B, SLOT_C, SLOT_D, TIP_FORM_STEPS
 
 SLOT_BYTES = {"A": SLOT_A, "B": SLOT_B, "C": SLOT_C, "D": SLOT_D}
 BOX_ADDR = 0x01
@@ -56,6 +57,73 @@ def _moonraker_gcode(script, host, port=7125, timeout=45.0):
         url, data=data, headers={"Content-Type": "application/json"}, method="POST")
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return resp.read()
+
+
+def _moonraker_sensor(host, sensor_name, port=7125, timeout=5.0):
+    """Query one Moonraker printer object's status - used by
+    retrude_with_tip_form() to check the toolhead filament sensor.
+    Object names with spaces (e.g. "filament_switch_sensor
+    filament_sensor_2") must be URL-encoded - a real bug hit live during
+    testing (see FINDINGS.md, session 2026-08-16) before this used
+    urllib.parse.quote()."""
+    url = "http://%s:%d/printer/objects/query?%s" % (
+        host, port, urllib.parse.quote(sensor_name))
+    with urllib.request.urlopen(url, timeout=timeout) as resp:
+        data = json.loads(resp.read())
+    return data["result"]["status"][sensor_name]
+
+
+def retrude_with_tip_form(cfs, box_addr, moonraker_host,
+                           sensor_name="filament_switch_sensor filament_sensor_2",
+                           verbose=False):
+    """UNTESTED (as of this writing) reimplementation of the real official
+    firmware's unload sequence - see TIP_FORM_STEPS in cfs_protocol.py and
+    FINDINGS.md in the private research log for where this came from and
+    why: a single box-side RETRUDE_PROCESS call (what this repo did
+    before) can leave filament jammed in the toolhead extruder's own
+    drive gear, needing a manual lever release - confirmed live, see
+    docs/TOOLCHANGE_TEST_PLAN.md.
+
+    First "wiggles" the extruder a small net distance to re-melt and
+    re-shape the filament tip into a smooth taper - a blobby/snagged tip
+    is what catches in the gear on the way out - then does the real
+    retraction in -15mm chunks, checking in with the box (a generic,
+    no-specific-slot RETRUDE_PROCESS call) and the toolhead sensor
+    between chunks so it can stop as soon as filament is confirmed clear
+    rather than always doing the full sequence.
+
+    Returns True if it believes the unload succeeded (toolhead sensor
+    confirmed clear, or the box acknowledged every step), False if the
+    box reported a real failure partway through.
+    """
+    _moonraker_gcode("M83", moonraker_host)
+    for dist, speed in TIP_FORM_STEPS:
+        if dist <= -10:
+            # A "real" retraction step - check in with the box first,
+            # same as the official sequence.
+            resp = cfs.retrude_stage(box_addr, 0x00, 0x00)  # slot=none, trigger=BUFFER
+            status = resp[3] if len(resp) >= 4 else None
+            if verbose:
+                print(f"    box check-in before {dist}mm: "
+                      f"{'status=%#04x' % status if status is not None else '(no reply)'}")
+            if status is None:
+                print("    no reply from box mid-unload, stopping - check physically")
+                return False
+            if status != 0x00:
+                # Box thinks its part might be done - the real signal is
+                # whether the toolhead sensor agrees.
+                cfs.set_box_mode_idle(box_addr)
+                sensor = _moonraker_sensor(moonraker_host, sensor_name)
+                if not sensor.get("filament_detected"):
+                    if verbose:
+                        print("    toolhead sensor clear - unload complete, stopping early")
+                    return True
+                # Sensor still sees filament - fall through and keep
+                # trying the remaining steps rather than giving up here.
+        _moonraker_gcode("G0 E%.2f F%.0f" % (dist, speed), moonraker_host)
+        _moonraker_gcode("M400", moonraker_host)
+    sensor = _moonraker_sensor(moonraker_host, sensor_name)
+    return not sensor.get("filament_detected")
 
 
 def print_status(cfs):
@@ -108,6 +176,18 @@ def do_retrude(args):
         time.sleep(0.5)
         cfs.retrude_stage(BOX_ADDR, slot, 0x01)
         print(f"RETRUDE slot={slot_letter} sent.")
+
+        if args.moonraker_host:
+            print("Running tip-form unload sequence to clear the toolhead "
+                  "extruder cleanly (see FINDINGS.md) - UNTESTED, watch closely.")
+            ok = retrude_with_tip_form(cfs, BOX_ADDR, args.moonraker_host,
+                                        verbose=args.verbose)
+            print("Tip-form unload: %s" % ("confirmed clear" if ok else
+                                            "did NOT confirm clear - check physically"))
+        else:
+            print("NOTE: --moonraker-host not set, skipping the tip-form "
+                  "unload sequence - filament may jam in the toolhead "
+                  "extruder's own grip without it, see FINDINGS.md.")
 
 
 def do_extrude(args):
@@ -275,10 +355,10 @@ def build_parser():
     p.add_argument("--port", default=None,
                     help="serial port, e.g. /dev/ttyUSB0 or COM5 (default: auto-detect)")
     p.add_argument("--moonraker-host", default="127.0.0.1",
-                    help="Moonraker host for the toolhead moves EXTRUDE needs to "
-                         "complete its sequence (default: 127.0.0.1, i.e. run this "
-                         "script on the printer itself). Pass an empty string to "
-                         "skip those moves entirely.")
+                    help="Moonraker host for the toolhead moves EXTRUDE and RETRUDE "
+                         "need to complete their sequences (default: 127.0.0.1, i.e. "
+                         "run this script on the printer itself). Pass an empty "
+                         "string to skip those moves entirely.")
     sub = p.add_subparsers(dest="command")
 
     sub.add_parser("status", help="read-only box/sensor status").set_defaults(
@@ -286,6 +366,7 @@ def build_parser():
 
     p_retrude = sub.add_parser("retrude", help="reel filament back onto the spool")
     p_retrude.add_argument("--slot", default="A")
+    p_retrude.add_argument("--verbose", action="store_true")
     p_retrude.set_defaults(func=do_retrude, interactive=False)
 
     p_extrude = sub.add_parser("extrude", help="feed filament from the spool")

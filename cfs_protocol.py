@@ -80,6 +80,37 @@ SLOT_ALL = 0x0F
 
 BROADCAST_ALL_BOXES = 0xFE
 
+# "Tip-forming" toolhead move sequence for a clean, non-jamming unload -
+# found by examining Creality's own official firmware for this board
+# variant (see FINDINGS.md in the private research log for provenance;
+# this table and the orchestration around it are our own independent
+# re-implementation of the *technique*, not a copy of anyone's code).
+#
+# The idea, same one used by e.g. Bambu's AMS and Prusa's MMU: before
+# doing a long retraction, wiggle the extruder a small net distance
+# first (alternating push/pull) so the filament tip re-melts and
+# re-solidifies into a smooth taper instead of whatever shape it was
+# left in - a blobby/snagged tip is what gets stuck in the extruder's
+# drive gear on the way out. Plain "just retract" (what this repo did
+# for a while) can jam on exactly that.
+#
+# Each entry is (distance_mm, speed_mm_per_min). Positive = extrude,
+# negative = retract. The first 6 entries net only about -0.5mm of real
+# movement - that's the wiggle. The last entry of the wiggle is
+# deliberately very slow (60 mm/min) to give the tip time to actually
+# solidify into shape before the real pull starts. The remaining 6
+# entries are the real retraction - -15mm each, -90mm total, at
+# increasing speed - clearing the tip fully out of the hotend/extruder
+# gear area. In the real sequence each of these -15mm steps is preceded
+# by a box-side RETRUDE_PROCESS call and can stop early once the
+# toolhead sensor clears - see retrude_with_tip_form() in cfs_cli.py for
+# that orchestration (it needs G-code + sensor access this pure protocol
+# module doesn't have).
+TIP_FORM_STEPS = [
+    (0.5, 600), (-5, 600), (2.5, 600), (-1.25, 600), (1.75, 600), (1, 60),
+    (-15, 90), (-15, 90), (-15, 500), (-15, 500), (-15, 500), (-15, 500),
+]
+
 
 def crc8(data: bytes) -> int:
     """CRC-8, polynomial 0x07, no init/xorout. Matches the CFS wire format."""

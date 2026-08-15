@@ -58,7 +58,7 @@ Boxes ship unaddressed and must be discovered + assigned an address each session
 | `MEASURING_WHEEL` | `0x0E`? | **Untested by us, position inferred not confirmed.** `gitstonelabs` documents this at `0x0E` with a `[GET\|CLEAN]` action byte, response = a 4-byte big-endian IEEE-754 float (mm, negative, magnitude grows as filament feeds). Their `SET_PRE_LOADING` also sits at `0x0D`, matching ours exactly, and `0x0E` is immediately next in sequence on both sides and is otherwise a gap in our own table — reasonable to guess it lines up, but we've never sent this ourselves. See the note under `EXTRUDE_PROCESS` below for why this might matter. |
 | `TIGHTEN_UP_ENABLE` | `0x0F` | data=`[0x01]`/`[0x00]`. Wraps the `EXTRUDE_PROCESS` sequence. |
 | `EXTRUDE_PROCESS` | `0x10` | data=`[slot, stage, amount]` — 3 bytes, `amount` is usually `0x00`. **We briefly "corrected" this to a 2-byte `[slot, stage]` form** after decompiling Creality's official firmware's host-side driver code, which appeared to send exactly that — it regressed live (even slot A started failing `PARAMS_ERR` immediately) and was reverted. This specific CFS unit's own onboard firmware apparently doesn't match whatever transport framing that host-side code assumes; trust live hardware behavior over source code when they disagree. `stage=0x07`'s real `amount` byte is unconfirmed - we use `0x02` (the decompiled source's special-cased value for that stage) as an untested-in-isolation guess. See the dedicated section below — this took the most work to get right, in two separate sessions. |
-| `RETRUDE_PROCESS` | `0x11` | data=`[slot, stage]`, stages `0x00` then `0x01`. **Fully working, physically confirmed** — reels filament back onto the spool. Much simpler than extrude; no connection-motor precursor needed. |
+| `RETRUDE_PROCESS` | `0x11` | data=`[slot, stage]`, stages `0x00` then `0x01`. Reels filament back onto the spool. **Reliable on its own only for filament that hasn't been fed past the toolhead sensor.** For filament that reached the extruder's own drive gear (i.e. after a full `EXTRUDE`), this single call alone can leave it jammed there, needing a manual idler-lever release - see the "tip-forming unload" section below for the real fix. |
 | `GET_VERSION_SN` | `0x14` | Returns an ASCII version/serial string. |
 | `GET_HARDWARE_STATUS` | `0x15` | Returns what look like per-channel voltage/current readings. |
 
@@ -221,6 +221,60 @@ went true, and `GET_FILAMENT_SENSOR_STATE`'s CONNECTIONS bank reported
 `0x08` (slot D), the first time all project long the box's own
 "connected slot" state reflected anything other than A. See
 `TOOLCHANGE_TEST_PLAN.md` phase 2 for the full trail.
+
+## RETRUDE — the tip-forming unload sequence
+
+A plain `RETRUDE_PROCESS` call (box-side only) works fine for filament
+that never made it past the toolhead sensor. But once `EXTRUDE` has
+pushed material all the way into the toolhead extruder's own drive
+gear - which the completed sequence above does on purpose, to prime it
+- a single `RETRUDE_PROCESS` call can leave that filament jammed there.
+Confirmed live, repeatedly: the box reports `RETRUDE_ERR2`/`RETRUDE_ERR7`
+("failed to exit connections"), the toolhead sensor never clears no
+matter how long you wait, and the only fix in the moment was manually
+releasing the toolhead extruder's idler lever.
+
+The real cause, and the fix, turned up the same way the stage 6/7
+completion did - by examining Creality's own official firmware. It
+turns out unloading isn't just "call `RETRUDE_PROCESS` and wait" there
+either; it's preceded by a **tip-forming sequence**: a deliberate
+pattern of small toolhead-side extrude/retract moves that re-melts and
+re-shapes the filament tip into a smooth taper before the real pull
+starts. This is the same idea Bambu's AMS and Prusa's MMU use - a
+blobby or snagged tip (whatever shape it happened to cool into) is what
+catches in a drive gear on the way out; a clean taper doesn't.
+
+The move table (12 steps, `(distance_mm, speed_mm_per_min)`, positive =
+extrude):
+
+```
+(0.5, 600), (-5, 600), (2.5, 600), (-1.25, 600), (1.75, 600), (1, 60),
+(-15, 90), (-15, 90), (-15, 500), (-15, 500), (-15, 500), (-15, 500)
+```
+
+The first 6 steps net only about **-0.5mm** of real movement - that's
+the wiggle. Its last step is deliberately very slow (60mm/min for just
+1mm) to give the re-melted tip time to actually solidify into shape
+before anything real happens. Only then do the last 6 steps do the
+**real retraction: -15mm each, -90mm total** - far more than the
+-15mm-once we originally tried, which is very likely why that didn't
+reliably work either.
+
+The other piece: each of those -15mm steps is preceded by a **generic
+`RETRUDE_PROCESS` call with `data=[0x00, 0x00]`** - slot byte `0x00`
+(no specific slot, not the actual A-D bitmask), trigger `0x00`
+(BUFFER) - checked in with the box before every chunk of toolhead
+movement, not just once at the start. If that call's response
+indicates the box thinks it's done, the sequence checks the *toolhead
+sensor* to confirm, and stops early the moment it reads clear rather
+than always running the full -90mm.
+
+An implementation of this (own re-implementation of the technique, not
+a copy of anyone's source - see the private research log's provenance
+note) is in `cfs_protocol.py`'s `TIP_FORM_STEPS` plus
+`retrude_with_tip_form()` in `cfs_cli.py`, and built into
+`klipper_extra/creality_cfs.py`'s `CFS_RETRUDE`. **Not yet tested live**
+as of this writing - see `TOOLCHANGE_TEST_PLAN.md` for status.
 
 ## Firmware background (if you want to go deeper)
 
