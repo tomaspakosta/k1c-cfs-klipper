@@ -39,6 +39,15 @@ Each of these is a single command, watch the printer each time.
    (adjust to your own measured coordinates if different from ours).
    Confirm the lever presses, then retreat: `G1 Y200 F1500`. ✅ lever
    pressed/released reliably, reproducible with plain G-code.
+
+   **⚠️ Update, 2026-08-16: these exact coordinates stopped being
+   correct** — after further hardware handling this position started
+   hitting a nearby purge/wipe flap instead of the cutter. Re-calibrated
+   to **`X=36.0, Y=227.0`** the same way (manual jog, watch it happen,
+   read back coordinates) - see `docs/PROTOCOL.md`'s cutter section for
+   the full story. Re-verify your own coordinates any time you handle
+   the printer physically; don't assume a once-calibrated position stays
+   correct forever.
 4. **`python cfs_cli.py extrude --slot <X>`** — same slot as step 2 or a
    fresh one, confirms EXTRUDE still reaches the toolhead sensor after the
    remount. Watch `filament_detected` in Fluidd/Moonraker if you have the

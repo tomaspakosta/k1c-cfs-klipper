@@ -155,7 +155,7 @@ graph LR
     Box --> D["Slot D"]
     A & B & C & D --> Buffer["Spring buffer<br/>(20mm reserve)"]
     Buffer --> Sensor["Toolhead filament sensor<br/>(reached, sensor confirmed)"]
-    Sensor --> Cutter["Cutter, lever-actuated<br/>X150/Y225 confirmed via G-code<br/>full cut macro still pending"]
+    Sensor --> Cutter["Cutter, lever-actuated<br/>X36/Y227 confirmed via G-code<br/>full cut macro still pending"]
 ```
 
 And this is the sequence that actually gets filament moving — the part that
@@ -265,11 +265,15 @@ assumption in `docs/PROTOCOL.md` has been corrected.
 The real cut position was found by jogging the toolhead by hand (via the
 printer's touchscreen, which preserves Klipper's position tracking — no
 steppers disabled) until the lever was visibly pressed, then reading the
-exact coordinates back from Klipper: **`X=150.0, Y=225.0`** on our unit —
-notably different from `X=42.0` in an older reference config for a
-different physical printer, which is exactly why this was worth measuring
-directly rather than assuming. Retreating and re-approaching that position
-purely via `G1` commands reliably re-triggers the lever every time.
+exact coordinates back from Klipper — currently **`X=36.0, Y=227.0`** on
+our unit (this changed once already, from an original `X=150.0, Y=225.0`,
+after further hardware handling shifted things — see `docs/PROTOCOL.md`'s
+cutter section). Notably different either way from `X=42.0` in an older
+reference config for a different physical printer, which is exactly why
+this is worth measuring directly rather than assuming, and **worth
+re-measuring any time you handle the printer**, not just once. Retreating
+and re-approaching the current position purely via `G1` commands reliably
+re-triggers the lever every time.
 
 Also now in place, all **drafts pending supervised testing at the
 printer** (none run even once yet, clearly marked as such in each file):

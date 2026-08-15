@@ -131,11 +131,17 @@ Before using any cut automation:
    your hardware behaves like ours (ours is lever-actuated; other
    revisions may drag filament across a stationary edge instead — see
    `docs/PROTOCOL.md`'s cutter section).
-2. **Find your own real cut-position coordinates.** Ours (`X=150, Y=225`)
-   are specific to our unit and are *not* a value you can safely reuse.
-   Home the printer, then jog by hand via the touchscreen/Fluidd (not with
-   steppers disabled — that loses position tracking) until the mechanism
-   triggers, then read the coordinates back from Klipper. Full walkthrough
+2. **Find your own real cut-position coordinates.** Ours (currently
+   `X=36, Y=227` — it changed once already after hardware handling, from
+   an original `X=150, Y=225`) are specific to our unit and are *not* a
+   value you can safely reuse, and not something to treat as permanent
+   even on the same unit. Home the printer, then jog by hand via the
+   touchscreen/Fluidd (not with steppers disabled — that loses position
+   tracking) until the mechanism triggers, then read the coordinates
+   back from Klipper. Re-check after any physical handling of the
+   printer - if a nearby purge/wipe flap exists, physically distinguish
+   it from the cutter lever before trusting either one's coordinates
+   (easy to confuse the two, we did more than once). Full walkthrough
    and a `G90`/`G91` gotcha we hit are documented in `docs/PROTOCOL.md`.
 3. Only then consider adapting `cut_macro_draft.cfg` with your own
    coordinates, and test it supervised, at low speed, one pass at a time.
