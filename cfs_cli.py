@@ -33,14 +33,23 @@ SLOT_BYTES = {"A": SLOT_A, "B": SLOT_B, "C": SLOT_C, "D": SLOT_D}
 BOX_ADDR = 0x01
 
 
-def _moonraker_gcode(script, host, port=7125, timeout=10.0):
+def _moonraker_gcode(script, host, port=7125, timeout=45.0):
     """Send a G-code script to Klipper via Moonraker's HTTP API. Used by
     do_extrude() for the toolhead-side moves the real official firmware
     sequence does between EXTRUDE_PROCESS stages 5/6/7 - see that
     function's comment and FINDINGS.md in the private research log for
     where this came from. Only reachable when this script runs on (or
     can reach) the printer's own Moonraker - stdlib-only (no new
-    dependency), matching this repo's "dependency-light" approach."""
+    dependency), matching this repo's "dependency-light" approach.
+
+    Moonraker's /printer/gcode/script doesn't return until Klipper
+    actually finishes the command, not just when it's queued - so the
+    timeout has to cover the real move time, not just network latency.
+    The slowest move we send here is G0 E5 F10 (5mm at 10mm/min = ~30s);
+    the default here (45s) was bumped up from an original 10s after that
+    undershoot crashed a live test outright (see FINDINGS.md, session
+    2026-08-16 - the CFS box itself was fine, this was purely a client
+    bug)."""
     url = "http://%s:%d/printer/gcode/script" % (host, port)
     data = json.dumps({"script": script}).encode()
     req = urllib.request.Request(
@@ -122,9 +131,13 @@ def do_extrude(args):
         time.sleep(0.5)
         cfs.tighten_up(BOX_ADDR, enable=True)
         time.sleep(0.3)
-        cfs.extrude_stage(BOX_ADDR, slot, stage=0x00)
+        r0 = cfs.extrude_stage(BOX_ADDR, slot, stage=0x00)
+        if args.verbose:
+            print(f"  stage 0: {r0.hex() if r0 else '(no reply)'}")
         time.sleep(0.3)
-        cfs.extrude_stage(BOX_ADDR, slot, stage=0x04)
+        r4 = cfs.extrude_stage(BOX_ADDR, slot, stage=0x04)
+        if args.verbose:
+            print(f"  stage 4: {r4.hex() if r4 else '(no reply)'}")
         time.sleep(0.3)
         for i in range(args.polls):
             resp = cfs.extrude_stage(BOX_ADDR, slot, stage=0x05)
