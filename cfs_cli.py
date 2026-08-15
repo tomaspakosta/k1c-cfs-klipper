@@ -106,20 +106,27 @@ def retrude_with_tip_form(cfs, box_addr, moonraker_host,
             if verbose:
                 print(f"    box check-in before {dist}mm: "
                       f"{'status=%#04x' % status if status is not None else '(no reply)'}")
-            if status is None:
-                print("    no reply from box mid-unload, stopping - check physically")
-                return False
             if status != 0x00:
-                # Box thinks its part might be done - the real signal is
-                # whether the toolhead sensor agrees.
+                # Either the box didn't reply at all, or it thinks its
+                # part might already be done (this call is a generic,
+                # no-specific-slot check-in - it can be a no-op/stale
+                # query if the earlier slot-specific RETRUDE_PROCESS
+                # calls in do_retrude() already finished the actual
+                # unload, which is expected and fine). Either way, the
+                # real signal is whether the toolhead sensor agrees -
+                # don't declare failure on this call's status alone.
                 cfs.set_box_mode_idle(box_addr)
                 sensor = _moonraker_sensor(moonraker_host, sensor_name)
                 if not sensor.get("filament_detected"):
                     if verbose:
                         print("    toolhead sensor clear - unload complete, stopping early")
                     return True
-                # Sensor still sees filament - fall through and keep
-                # trying the remaining steps rather than giving up here.
+                if status is None:
+                    print("    no reply from box AND toolhead sensor still sees "
+                          "filament, stopping - check physically")
+                    return False
+                # Sensor still sees filament but box did reply - fall
+                # through and keep trying the remaining steps.
         _moonraker_gcode("G0 E%.2f F%.0f" % (dist, speed), moonraker_host)
         _moonraker_gcode("M400", moonraker_host)
     sensor = _moonraker_sensor(moonraker_host, sensor_name)

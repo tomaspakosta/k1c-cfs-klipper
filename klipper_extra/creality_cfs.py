@@ -313,19 +313,27 @@ class CrealityCFS:
             if dist <= -10:
                 resp = self._send(self.box_addr, 0xFF, FN["RETRUDE_PROCESS"], bytes([0x00, 0x00]))
                 status = resp[3] if len(resp) >= 4 else None
-                if status is None:
-                    gcmd.respond_info("CFS_RETRUDE: no reply from box mid-unload, "
-                                       "stopping - check physically")
-                    return False
                 if status != 0x00:
+                    # Either no reply, or the box thinks its part might
+                    # already be done (this generic, no-specific-slot
+                    # check-in can be a stale/no-op query if the earlier
+                    # slot-specific RETRUDE_PROCESS calls above already
+                    # finished the actual unload - expected and fine).
+                    # The real signal is the toolhead sensor, not this
+                    # call's status alone.
                     self._send(self.box_addr, 0xFF, FN["SET_BOX_MODE"], bytes([0x00, 0x01]))
                     detected = self._toolhead_filament_detected()
                     if detected is False:
                         gcmd.respond_info("CFS_RETRUDE: toolhead sensor clear, "
                                            "unload complete (stopped early)")
                         return True
-                    # Sensor still sees filament (or no sensor configured) -
-                    # keep going with the remaining steps.
+                    if status is None:
+                        gcmd.respond_info("CFS_RETRUDE: no reply from box AND toolhead "
+                                           "sensor still sees filament, stopping - "
+                                           "check physically")
+                        return False
+                    # Sensor still sees filament but box did reply - keep
+                    # going with the remaining steps.
             self.gcode.run_script_from_command("G0 E%.2f F%.0f" % (dist, speed))
             self.gcode.run_script_from_command("M400")
         detected = self._toolhead_filament_detected()

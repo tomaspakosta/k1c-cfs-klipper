@@ -229,8 +229,21 @@ move table and rationale in `docs/PROTOCOL.md`'s "RETRUDE — the
 tip-forming unload sequence". Implemented in `cfs_protocol.py`
 (`TIP_FORM_STEPS`), `cfs_cli.py` (`retrude_with_tip_form()`, wired into
 `do_retrude()`), and `klipper_extra/creality_cfs.py` (built into
-`CFS_RETRUDE` itself). **Not yet tested live** - next session's first
-priority once a working spool is back in slot A (see below).
+`CFS_RETRUDE` itself).
+
+**✅ Confirmed live, 2026-08-16, fresh spools in all 4 slots.** Two
+consecutive extrude→cut→retrude cycles on slot A both retracted **fully
+automatically, no manual idler-lever assist needed** - the exact
+failure mode this was built to fix. (The first run's own script output
+said "did NOT confirm clear" - that was a reporting bug, not a real
+failure: `do_retrude()`'s existing slot-specific `RETRUDE_PROCESS`
+calls, sent just before the tip-form sequence starts, can already
+finish the actual unload, leaving the tip-form sequence's first
+generic check-in with nothing new to acknowledge. Fixed by checking
+the toolhead sensor - the real ground truth - whenever that check-in
+gets no reply or a non-OK status, instead of assuming failure. Second
+run confirmed the fix: same clean automatic result, correctly
+reported.)
 
 **Important operational lessons learned live this session:**
 1. Always CUT before RETRUDE if there's filament past the cutter
@@ -328,6 +341,13 @@ Only after phase 3's swap-only macro is confirmed working repeatedly:
    printer-side purge extrusion belongs somewhere around here" from the
    reference docs. Test it completely standalone first (heated, away from
    any model, watching it) before ever chaining it after a toolchange.
+   User note from live testing: **the purge needs to happen right after
+   EXTRUDE/loading a new slot** (matches the official sequence's own
+   `BOX_MATERIAL_FLUSH` placement, after load not after unload), and the
+   resulting purge blob needs manually cleaning out of the drip
+   tray/waste catcher afterward - not something to automate, just don't
+   forget it operationally, and don't let blobs accumulate to the point
+   they interfere with the mechanism.
 2. Once both `CFS_TOOLCHANGE` and `CFS_FLUSH` are independently trusted,
    `macros/tool_aliases_draft.cfg` wires `T0`-`T3` to call them together
    using the saved active-slot state. Call `T0`/`T1`/etc. by hand from the
