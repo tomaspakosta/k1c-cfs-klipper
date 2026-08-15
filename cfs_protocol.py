@@ -222,8 +222,23 @@ class CFSClient:
             return resp[5]
         return None
 
+    def set_box_mode(self, addr: int, mode: str, slot: int = 0x00) -> bytes:
+        """mode: "PRINT" or "IDLE". slot: a single SLOT_A..SLOT_D bitmask,
+        or 0x00 (the default) for "no slot" - the generic form used to
+        bracket a sequence. Real wire payload is [slot, mode_byte]
+        (mode_byte: PRINT=0x00, IDLE=0x01) - confirmed by decompiling the
+        real official firmware (see FINDINGS.md in the private research
+        log; not reproduced here, just the byte layout it revealed).
+        set_box_mode_idle() covers the generic no-slot case; use this
+        directly for the per-slot PRINT-mode form the official sequence
+        sends once a specific slot has finished loading."""
+        mode_byte = {"PRINT": 0x00, "IDLE": 0x01}[mode]
+        return self.send(addr, 0xFF, FN["SET_BOX_MODE"], bytes([slot, mode_byte]))
+
     def set_box_mode_idle(self, addr: int) -> bytes:
-        return self.send(addr, 0xFF, FN["SET_BOX_MODE"], bytes([0x00, 0x01]))
+        """Generic "enter feed mode" IDLE, no specific slot (slot=0x00).
+        See set_box_mode() for the per-slot PRINT-mode form."""
+        return self.set_box_mode(addr, "IDLE", slot=0x00)
 
     def ctrl_connection_motor(self, addr: int, action: int) -> bytes:
         """action: 0x00=STOP, 0x01=EXTRUDE (connect feed path), 0x02=RETRUDE.
@@ -234,8 +249,24 @@ class CFSClient:
     def tighten_up(self, addr: int, enable: bool) -> bytes:
         return self.send(addr, 0xFF, FN["TIGHTEN_UP_ENABLE"], bytes([0x01 if enable else 0x00]))
 
-    def extrude_stage(self, addr: int, slot: int, stage: int, amount: int = 0x00) -> bytes:
-        return self.send(addr, 0xFF, FN["EXTRUDE_PROCESS"], bytes([slot, stage, amount]))
+    def extrude_stage(self, addr: int, slot: int, stage: int) -> bytes:
+        """Real wire payload is [slot, stage] (2 bytes) for every stage
+        except stage=7, which gets one extra fixed 0x02 byte appended -
+        confirmed by decompiling the real official firmware (see
+        FINDINGS.md). We previously always sent a 3rd 'amount' byte
+        (usually 0x00) for every stage; that was apparently harmless for
+        stages 0/4/5 (what we'd tested) but wasn't the real protocol."""
+        data = bytes([slot, stage])
+        if stage == 7:
+            data += b"\x02"
+        return self.send(addr, 0xFF, FN["EXTRUDE_PROCESS"], data)
 
     def retrude_stage(self, addr: int, slot: int, stage: int) -> bytes:
         return self.send(addr, 0xFF, FN["RETRUDE_PROCESS"], bytes([slot, stage]))
+
+    def get_buffer_state(self, addr: int) -> int | None:
+        """Returns the buffer fill state: 0=middle, 1=full, 2=empty."""
+        resp = self.send(addr, 0xFF, FN["GET_BUFFER_STATE"])
+        if len(resp) >= 6:
+            return resp[5]
+        return None

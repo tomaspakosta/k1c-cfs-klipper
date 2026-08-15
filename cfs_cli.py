@@ -22,13 +22,31 @@ answer one - that's on you to only automate once you've verified a command
 by hand first.
 """
 import argparse
+import json
 import sys
 import time
+import urllib.request
 
 from cfs_protocol import CFSClient, SLOT_A, SLOT_B, SLOT_C, SLOT_D
 
 SLOT_BYTES = {"A": SLOT_A, "B": SLOT_B, "C": SLOT_C, "D": SLOT_D}
 BOX_ADDR = 0x01
+
+
+def _moonraker_gcode(script, host, port=7125, timeout=10.0):
+    """Send a G-code script to Klipper via Moonraker's HTTP API. Used by
+    do_extrude() for the toolhead-side moves the real official firmware
+    sequence does between EXTRUDE_PROCESS stages 5/6/7 - see that
+    function's comment and FINDINGS.md in the private research log for
+    where this came from. Only reachable when this script runs on (or
+    can reach) the printer's own Moonraker - stdlib-only (no new
+    dependency), matching this repo's "dependency-light" approach."""
+    url = "http://%s:%d/printer/gcode/script" % (host, port)
+    data = json.dumps({"script": script}).encode()
+    req = urllib.request.Request(
+        url, data=data, headers={"Content-Type": "application/json"}, method="POST")
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return resp.read()
 
 
 def print_status(cfs):
@@ -115,6 +133,45 @@ def do_extrude(args):
             time.sleep(0.4)
         cfs.tighten_up(BOX_ADDR, enable=False)
         cfs.ctrl_connection_motor(BOX_ADDR, action=0x00)
+
+        # UNTESTED: the rest of this function (stage 6/7 + the toolhead E
+        # moves between them) was added after decompiling Creality's real
+        # official firmware and reading its actual extrude_material()
+        # sequence - see FINDINGS.md in the private research log for the
+        # full story and the exact source this came from (not reproduced
+        # here - see that log's legal/provenance note). We had NEVER done
+        # any of this before: we always stopped right after the stage-5
+        # poll loop above, which may be why switching to a slot other than
+        # A never worked - the box may never have been told the load
+        # actually finished. The real sequence, in order:
+        #   M83, G0 E10 F35 (slow toolhead prime)  -> stage 6
+        #   M83, G0 E5 F10  (slower toolhead prime) -> stage 7
+        #   SET_BOX_MODE PRINT for this specific slot (not just IDLE)
+        # Requires reaching this printer's Moonraker to send the toolhead
+        # moves - skipped (with a warning) if --moonraker-host isn't set.
+        if args.moonraker_host:
+            _moonraker_gcode("M83", args.moonraker_host)
+            _moonraker_gcode("G0 E10 F35", args.moonraker_host)
+            time.sleep(0.3)
+            ret6 = cfs.extrude_stage(BOX_ADDR, slot, stage=0x06)
+            if args.verbose:
+                print(f"  stage 6: {ret6.hex() if ret6 else '(no reply)'}")
+            time.sleep(0.3)
+            _moonraker_gcode("M83", args.moonraker_host)
+            _moonraker_gcode("G0 E5 F10", args.moonraker_host)
+            time.sleep(0.3)
+            ret7 = cfs.extrude_stage(BOX_ADDR, slot, stage=0x07)
+            if args.verbose:
+                print(f"  stage 7: {ret7.hex() if ret7 else '(no reply)'}")
+            time.sleep(0.3)
+            # Mark this specific slot as the active PRINT-mode slot - the
+            # real official sequence does this, we never did.
+            cfs.set_box_mode(BOX_ADDR, "PRINT", slot=slot)
+        else:
+            print("NOTE: --moonraker-host not set, skipping the stage 6/7 + "
+                  "toolhead-prime completion (see the comment above this line "
+                  "in cfs_cli.py) - slot switching may not work without it.")
+
         # A completed EXTRUDE_PROCESS run can leave the box reporting a
         # latched error status (seen live: EXTRUDE_ERR8) on GET_BOX_STATE
         # even when the extrude itself succeeded (toolhead sensor
@@ -180,7 +237,8 @@ def interactive_menu():
 
 
 def _ns(**kwargs):
-    ns = argparse.Namespace(port=None, interactive=True, verbose=False)
+    ns = argparse.Namespace(port=None, interactive=True, verbose=False,
+                             moonraker_host="127.0.0.1")
     for k, v in kwargs.items():
         setattr(ns, k, v)
     return ns
@@ -203,6 +261,11 @@ def build_parser():
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--port", default=None,
                     help="serial port, e.g. /dev/ttyUSB0 or COM5 (default: auto-detect)")
+    p.add_argument("--moonraker-host", default="127.0.0.1",
+                    help="Moonraker host for the toolhead moves EXTRUDE needs to "
+                         "complete its sequence (default: 127.0.0.1, i.e. run this "
+                         "script on the printer itself). Pass an empty string to "
+                         "skip those moves entirely.")
     sub = p.add_subparsers(dest="command")
 
     sub.add_parser("status", help="read-only box/sensor status").set_defaults(

@@ -252,30 +252,44 @@ class CrealityCFS:
         gcmd.respond_info("CFS_RETRUDE slot=%s sent" % slot_letter)
 
     def cmd_CFS_EXTRUDE(self, gcmd):
-        # UNTESTED CHANGE (not yet run live - see FINDINGS.md / project
-        # memory for the full story): this now adds two steps taken from a
-        # real factory box.cfg (same board variant, a different K1C) that
-        # our own testing never included, in an attempt to fix "only slot A
-        # ever works, B/C/D fail with EXTRUDE_ERR8/FR2832 regardless of
-        # session history or payload variations we've tried":
-        #   1. An error-clear-equivalent BEFORE starting (the stock sequence
-        #      is BOX_ERROR_CLEAR -> ... -> BOX_EXTRUDE_MATERIAL, error-clear
-        #      first, not just cleanup after). We don't know what stock
-        #      BOX_ERROR_CLEAR actually puts on the wire (closed-source
-        #      box.py) - gitstonelabs' own same-named command is host-side
-        #      only. Best-effort substitute: read GET_BOX_STATE so a latched
-        #      error is at least visible in the log, then send SET_BOX_MODE
-        #      IDLE same as our existing post-run cleanup.
-        #   2. BOX_GO_TO_EXTRUDE_POS - moving the toolhead to a specific
-        #      position BEFORE EXTRUDE_PROCESS. We have NEVER done this.
-        #      Coordinates default to the factory box.cfg's values (see
-        #      __init__) - override in printer.cfg if yours differ.
-        # IMPORTANT: this still doesn't implement BOX_NOZZLE_CLEAN or
-        # BOX_EXTRUDER_EXTRUDE (a toolhead-side extruder step the stock
-        # sequence runs AFTER the box-side extrude, purpose/parameters
-        # unknown to us) - if slot switching still fails with this change,
-        # those are the next things to investigate, not more RS485 payload
-        # variations.
+        # UNTESTED CHANGE (not yet run live - see FINDINGS.md in the private
+        # research log for the full story): after exhausting live guessing
+        # (7 failed attempts at slots other than A, always the same
+        # EXTRUDE_ERR8/FR2832 failure), we downloaded Creality's real
+        # official K1C firmware for this board variant and decompiled its
+        # actual box.py modules - see FINDINGS.md's "PRŮLOM" section. That
+        # gave us ground truth instead of guesses:
+        #   1. An error-clear-equivalent BEFORE starting, not just cleanup
+        #      after (best effort - we log GET_BOX_STATE, then SET_BOX_MODE
+        #      IDLE; we don't know exactly what stock BOX_ERROR_CLEAR puts
+        #      on the wire since box_wrapper.py didn't decompile cleanly).
+        #   2. BOX_GO_TO_EXTRUDE_POS - move the toolhead to a specific
+        #      position before EXTRUDE_PROCESS (coords from a real factory
+        #      box.cfg, see __init__ / printer.cfg to override).
+        #   3. THE key missing piece: the real sequence does NOT stop after
+        #      polling stage 5 until the toolhead sensor trips, like we
+        #      always did. It continues: M83 + a slow toolhead-side G0 E10
+        #      F35 move, THEN EXTRUDE_PROCESS stage 6, THEN another M83 + an
+        #      even slower G0 E5 F10, THEN stage 7 - and only then marks the
+        #      slot as loaded via the per-slot PRINT form of SET_BOX_MODE
+        #      (payload [slot_bitmask, 0x00], confirmed from the real
+        #      firmware - our old belief that SET_BOX_MODE always took a
+        #      fixed [0x00, mode] pair was wrong, see set_box_mode() below).
+        #      We had NEVER done any of this - we always stopped right
+        #      after stage 5 and went straight to cleanup. This may be why
+        #      the box never properly "finished" a load internally, which
+        #      would explain both the post-run latched-error gotcha above
+        #      AND why it could never switch to a different slot afterwards.
+        #   4. EXTRUDE_PROCESS's real payload is [slot, stage] (2 bytes),
+        #      not the 3 bytes ([slot, stage, 0x00]) we always sent - real
+        #      firmware only appends an extra byte (fixed 0x02) for stage 7
+        #      specifically. Fixed below; probably harmless before, but not
+        #      what the real protocol does.
+        # Still not implemented: BOX_NOZZLE_CLEAN (a wipe step the stock
+        # sequence also runs) and the cutter-homing RS485 exchange the real
+        # firmware does via its own cut_action object before every load
+        # (we currently home the cutter with plain G-code moves instead,
+        # which is physically confirmed to work, just not how stock does it).
         slot_letter = gcmd.get("SLOT", "A").upper()
         if slot_letter not in SLOT_BYTES:
             raise gcmd.error("SLOT must be one of A, B, C, D")
@@ -308,14 +322,32 @@ class CrealityCFS:
         self._send(self.box_addr, 0xFF, FN["TIGHTEN_UP_ENABLE"], bytes([0x01]))
         time.sleep(0.3)
 
-        self._send(self.box_addr, 0xFF, FN["EXTRUDE_PROCESS"], bytes([slot, 0x00, 0x00]))
+        # EXTRUDE_PROCESS payload is [slot, stage] - see the header comment.
+        self._send(self.box_addr, 0xFF, FN["EXTRUDE_PROCESS"], bytes([slot, 0x00]))
         time.sleep(0.3)
-        self._send(self.box_addr, 0xFF, FN["EXTRUDE_PROCESS"], bytes([slot, 0x04, 0x00]))
+        self._send(self.box_addr, 0xFF, FN["EXTRUDE_PROCESS"], bytes([slot, 0x04]))
         time.sleep(0.3)
 
         for _ in range(polls):
-            self._send(self.box_addr, 0xFF, FN["EXTRUDE_PROCESS"], bytes([slot, 0x05, 0x00]))
+            self._send(self.box_addr, 0xFF, FN["EXTRUDE_PROCESS"], bytes([slot, 0x05]))
             time.sleep(0.4)
+
+        # Stages 6/7 + the toolhead-side prime moves between them - see the
+        # header comment above cmd_CFS_EXTRUDE. UNTESTED.
+        self.gcode.run_script_from_command("M83")
+        self.gcode.run_script_from_command("G0 E10 F35")
+        time.sleep(0.3)
+        self._send(self.box_addr, 0xFF, FN["EXTRUDE_PROCESS"], bytes([slot, 0x06]))
+        time.sleep(0.3)
+        self.gcode.run_script_from_command("M83")
+        self.gcode.run_script_from_command("G0 E5 F10")
+        time.sleep(0.3)
+        self._send(self.box_addr, 0xFF, FN["EXTRUDE_PROCESS"], bytes([slot, 0x07, 0x02]))
+        time.sleep(0.3)
+        # Mark this specific slot as the active PRINT-mode slot - payload
+        # [slot_bitmask, 0x00], NOT the fixed [0x00, mode] pair used for the
+        # generic enter-feed-mode / cleanup calls elsewhere in this file.
+        self._send(self.box_addr, 0xFF, FN["SET_BOX_MODE"], bytes([slot, 0x00]))
 
         self._send(self.box_addr, 0xFF, FN["TIGHTEN_UP_ENABLE"], bytes([0x00]))
         self._send(self.box_addr, 0xFF, FN["CTRL_CONNECTION_MOTOR_ACTION"], bytes([0x00]))

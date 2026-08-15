@@ -49,7 +49,7 @@ Boxes ship unaddressed and must be discovered + assigned an address each session
 |---|---:|---|
 | `GET_RFID` | `0x02` | data=`[slot 0-3]`. Returns ASCII like `A:none;` when no RFID chip is present on the spool (most consumer/noname filament doesn't have one — this is expected, not an error). |
 | `GET_REMAIN_LEN` | `0x03` | data=`[slot]` |
-| `SET_BOX_MODE` | `0x04` | data=`[0x00,0x01]` = IDLE mode (needed before manual/scripted control — disables the box's own automatic buffer management) |
+| `SET_BOX_MODE` | `0x04` | data=`[slot_or_zero, mode]`. `mode`: `0x00`=PRINT, `0x01`=IDLE. `slot_or_zero` is a single slot bitmask (`0x01`=A..`0x08`=D) to mark that specific slot as the active PRINT-mode slot once it's finished loading, or `0x00` for the generic "no particular slot" form used to bracket a sequence (what `data=[0x00,0x01]` — IDLE, no slot — actually means; this repo's `cfs_protocol.py` calls that `set_box_mode_idle()`). We originally thought the first byte was always a fixed `0x00` — it isn't. |
 | `GET_BUFFER_STATE` | `0x05` | 1-byte response: `0x00`=middle, `0x01`=full, `0x02`=empty |
 | `CTRL_CONNECTION_MOTOR_ACTION` | `0x07` | **The command that was missing from our early attempts.** data=`[action]`: `0x00`=STOP, `0x01`=EXTRUDE (mechanically connects the target slot to the shared feed path), `0x02`=RETRUDE. Call this *before* `EXTRUDE_PROCESS`. |
 | `GET_FILAMENT_SENSOR_STATE` | `0x08` | data=`[bank]`. Bank `0x00` = MATERIAL: global 4-bit bitmask, which slots have filament present. Bank `0x01` = CONNECTIONS: which slot is currently mechanically connected. **Empirically confirmed bit mapping: bit0=A, bit1=B, bit2=C, bit3=D** (physical left-to-right), by pulling filament from one slot at a time and watching the bit clear. Independently cross-confirmed by `gitstonelabs/creality-cfs-klipper` — same function code, same `0x00`/`0x01` channel split, though they call it `GET_HARDWARE_STATUS` (a name collision with a *different* function in our own table below — don't confuse the two across projects). |
@@ -57,7 +57,7 @@ Boxes ship unaddressed and must be discovered + assigned an address each session
 | `SET_PRE_LOADING` | `0x0D` | data=`[slot_mask, phase]` — **not** `[slot_mask, enable]` as we first assumed, see below. |
 | `MEASURING_WHEEL` | `0x0E`? | **Untested by us, position inferred not confirmed.** `gitstonelabs` documents this at `0x0E` with a `[GET\|CLEAN]` action byte, response = a 4-byte big-endian IEEE-754 float (mm, negative, magnitude grows as filament feeds). Their `SET_PRE_LOADING` also sits at `0x0D`, matching ours exactly, and `0x0E` is immediately next in sequence on both sides and is otherwise a gap in our own table — reasonable to guess it lines up, but we've never sent this ourselves. See the note under `EXTRUDE_PROCESS` below for why this might matter. |
 | `TIGHTEN_UP_ENABLE` | `0x0F` | data=`[0x01]`/`[0x00]`. Wraps the `EXTRUDE_PROCESS` sequence. |
-| `EXTRUDE_PROCESS` | `0x10` | data=`[slot, stage, amount]`. See the dedicated section below — this took the most work to get right. |
+| `EXTRUDE_PROCESS` | `0x10` | data=`[slot, stage]` — 2 bytes normally; stage `0x07` gets one extra fixed byte `0x02` appended (`[slot, 0x07, 0x02]`). We originally sent a 3rd byte on every stage (usually `0x00`); apparently harmless for stages 0/4/5 but not what the real protocol does. See the dedicated section below — this took the most work to get right. |
 | `RETRUDE_PROCESS` | `0x11` | data=`[slot, stage]`, stages `0x00` then `0x01`. **Fully working, physically confirmed** — reels filament back onto the spool. Much simpler than extrude; no connection-motor precursor needed. |
 | `GET_VERSION_SN` | `0x14` | Returns an ASCII version/serial string. |
 | `GET_HARDWARE_STATUS` | `0x15` | Returns what look like per-channel voltage/current readings. |
@@ -97,21 +97,31 @@ is *not* yet a confirmed fully automatic, hands-off box→PTFE→toolhead feed.
 That's the next thing to verify once the tube is connected.
 
 ```
-SET_BOX_MODE            data=[0x00, 0x01]              (IDLE mode)
+SET_BOX_MODE            data=[0x00, 0x01]              (IDLE mode, no slot)
 CTRL_CONNECTION_MOTOR_ACTION  data=[0x01]               (ACTION=EXTRUDE — connects the feed path)
 TIGHTEN_UP_ENABLE       data=[0x01]                     (enable)
-EXTRUDE_PROCESS         data=[slot, 0x00, 0x00]         (stage 0)
-EXTRUDE_PROCESS         data=[slot, 0x04, 0x00]         (stage 4)
-EXTRUDE_PROCESS         data=[slot, 0x05, 0x00]         (stage 5 — poll this repeatedly;
+EXTRUDE_PROCESS         data=[slot, 0x00]               (stage 0)
+EXTRUDE_PROCESS         data=[slot, 0x04]               (stage 4)
+EXTRUDE_PROCESS         data=[slot, 0x05]               (stage 5 — poll this repeatedly;
                                                           this is where the motor actually runs.
                                                           The response's data bytes are live
                                                           telemetry and should visibly change
                                                           between polls if it's really moving.
-                                                          Keep polling: ~10 polls got material
-                                                          past the buffer, but it took ~40 polls
-                                                          at a ~0.4s interval for it to reach the
-                                                          toolhead sensor - there's no separate
-                                                          "go further" command, just keep going.)
+                                                          Keep polling until the toolhead sensor
+                                                          trips — ~10 polls got material past the
+                                                          buffer, ~40 polls at a ~0.4s interval
+                                                          reached the toolhead sensor.)
+--- everything below this line was missing from every version of this repo
+    before 2026-08-15 - we always stopped after stage 5 and went straight
+    to cleanup. See "What we'd been missing entirely" below. ---
+M83                                                     (toolhead: relative extrusion mode)
+G0 E10 F35                                              (toolhead: slow prime move)
+EXTRUDE_PROCESS         data=[slot, 0x06]               (stage 6)
+M83
+G0 E5 F10                                               (toolhead: slower prime move)
+EXTRUDE_PROCESS         data=[slot, 0x07, 0x02]         (stage 7 — note the extra byte)
+SET_BOX_MODE            data=[slot, 0x00]               (mark this slot PRINT-mode loaded)
+--- cleanup, same as before ---
 TIGHTEN_UP_ENABLE       data=[0x00]                     (disable)
 CTRL_CONNECTION_MOTOR_ACTION  data=[0x00]                (ACTION=STOP — cleanup)
 SET_BOX_MODE            data=[0x00, 0x01]              (IDLE again — see note below)
@@ -149,8 +159,7 @@ grounded next improvement rather than another guess.
 
 - Sending `EXTRUDE_PROCESS` alone (without `CTRL_CONNECTION_MOTOR_ACTION` first) fails deterministically with `EXTRUDE_ERR8` then `EXTRUDE_ERR10`, regardless of which slot you target in the `slot` byte. We tried this 4 different ways (different slot values, different sensor preconditions) before finding the missing step — all 4 produced byte-for-byte identical error responses, which in hindsight was itself a clue that the `slot` byte wasn't the variable that mattered.
 - Even more confusingly: once we *did* get real motor movement (before adding the connection-motor step, purely by chance from other testing), the motor ran on a **different physical slot than the `slot` byte requested**. This makes sense in hindsight — without `CTRL_CONNECTION_MOTOR_ACTION`, the box just runs whatever slot's feed path happens to already be mechanically connected (a leftover/default state), completely ignoring the `slot` byte in `EXTRUDE_PROCESS` until the connection step actually routes it.
-- A stage numbered `0x06` appears in one real captured reference dump (from someone else's box, different firmware revision), so we initially tried `...→ 0x05 → 0x06`. Other reference material describes the normal sequence as `0 → 4 → 5 → 7` instead, with `0x06` being a recovery/retry state rather than a normal step. We never needed to explicitly send `0x07` either — stopping the stage-5 polling loop and moving to cleanup was sufficient once the connection-motor step was in place. Your mileage may vary by firmware revision; if stage 5 polling errors out for you even with the connection-motor step done, trying an explicit `0x07` afterward is a reasonable next thing to check.
-- Two independent external references describe stages `0x06`/`0x07` (in *their* numbering) as gated by "the toolhead filament switch" activating. We initially had that sensor disconnected and could still get material past the buffer without it — but once we wired the sensor back up and simply kept polling stage 5 for longer (~40 polls instead of ~10), the filament reached the toolhead sensor on its own, with no explicit `0x06`/`0x07` ever sent. So for this firmware revision at least, stage 5 alone — given enough time — drives the whole feed; the "gating" in those other references may be about the *wrapper* deciding when to stop polling and declare success, not about the box firmware requiring a distinct stage transition. (See the caveat above though — that result was without a PTFE tube connected, so treat it as "the motor/sensor path works," not yet as "a fully automated feed.")
+- **Correction, 2026-08-15 — the earlier version of this bullet was wrong.** We used to believe stopping the stage-5 polling loop and going straight to cleanup was "sufficient" and that `0x06` was just a recovery/retry state. It isn't — see "What we'd been missing entirely" below. Stages `0x06` and `0x07` (with real toolhead-side moves interleaved) are a required part of the sequence, not optional extras; skipping them may be exactly why this project could never get a slot other than A working reliably (see `TOOLCHANGE_TEST_PLAN.md` phase 2).
 - The cutter turned out to be a non-issue for the extrude side: **it's not a CFS protocol command at all.** It's a pure toolhead-motion sequence — home X/Y, move to a configured pre-cut position, then to a configured cut position — implemented entirely as Klipper G-code macros, with no bytes sent to the CFS box. **Correction from an earlier version of this page:** we initially described the cut position as dragging filament across a stationary blade edge, based on external reference material for a different hardware revision. On our unit the mechanism is **lever-actuated** — hand-testing confirmed pressing a physical lever cleanly cuts the filament.
 
   Once the upgrade kit was properly mounted, we found the real `cut_pos` the safe way: jog the toolhead by hand via the printer's touchscreen (this keeps Klipper's homed position tracking intact — don't disable steppers and push the gantry by hand, you'll lose position reference and need to re-home) until the lever is visibly pressed, then read the exact coordinates back from Klipper (`toolhead`/`gcode_move` objects via Moonraker, or just the position display on the touchscreen). On our unit that's **`X=150.0, Y=225.0`** — notably different from `X=42.0` in an older reference config from a different physical printer, which is exactly why this needs measuring per-unit rather than assumed. We then confirmed it's fully reproducible with plain `G1 X150 Y225` moves — retreat (e.g. `G1 Y160`) then return reliably re-triggers the lever every time, no manual guidance needed once you have the real coordinates.
@@ -169,6 +178,38 @@ grounded next improvement rather than another guess.
   | `SLOT_REARM` | `0x02` | Actually re-runs the physical preload sequence for the given slot mask — a genuinely slow, blocking operation (~38s per their timing notes). |
 
   Our earlier tests only ever sent phase `0x00`/`0x01` (assuming they meant off/on) — we never tried `0x02`, which is apparently the one that actually moves anything. The real captured reference frame we validated against early in this project, `data=[0x0F, 0x01]`, decodes as "DISARM all slots" in this corrected model — not "enable", which is exactly why it never produced motor movement for us. This also confirms our earlier guess was on the right track: it *is* closer to a background arm/disarm toggle than a direct trigger, just with a third phase we hadn't found yet. **Untested by us**: phase `0x02` specifically, given the ~38s blocking behavior it's worth trying supervised, not blind.
+
+### What we'd been missing entirely — the real completion sequence
+
+After 7 separate live failures trying to get any slot other than A
+working, we ran out of things to reverse-engineer from wire traffic and
+external projects alone, so we went straight to the source: downloaded
+Creality's real official K1C firmware for our board variant from their
+own download page and examined how its actual driver module sequences
+`EXTRUDE_PROCESS`. (We're deliberately not detailing the extraction
+method or reproducing any of that code here — see this project's private
+research notes if you're doing the same investigation yourself; the
+short version is that it's an ordinary Linux firmware image, no exotic
+tooling required, and studying purchased hardware you own for
+interoperability is the entire premise of this repo.)
+
+The real sequence does **not** stop after stage 5 confirms the toolhead
+sensor. It continues with a slow toolhead-side prime move, stage 6, an
+even slower prime move, then stage 7 — shown in the sequence diagram
+above. Only after stage 7 completes does it mark the slot as the active
+"loaded" one via `SET_BOX_MODE`'s per-slot form. We had never sent stage
+6, stage 7, or moved the toolhead extruder as part of `EXTRUDE_PROCESS`
+at all — we always stopped right after stage 5 and jumped to cleanup.
+
+This plausibly explains multiple things we'd puzzled over separately:
+why a completed extrude could leave a latched error status (we never
+told the box the load actually finished, the "proper" way); and why
+trying to switch to a different slot afterward always failed the same
+way regardless of what we varied (the box may never have exited its
+"mid-load" state for the first slot in the first place). **This has
+been added to `klipper_extra/creality_cfs.py` and `cfs_cli.py` as of
+2026-08-15 but is not yet tested live** — see those files' comments and
+`TOOLCHANGE_TEST_PLAN.md` phase 2 for status.
 
 ## Firmware background (if you want to go deeper)
 

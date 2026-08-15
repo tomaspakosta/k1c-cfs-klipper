@@ -11,8 +11,16 @@ EXTRUDE_ERR8 / EXTRUDE_ERR10, or silently runs the wrong slot's motor.
 Physically confirmed working: filament visibly pushes past the buffer,
 and (in a separate test, with manual guidance since the PTFE tube wasn't
 connected at the time - see docs/PROTOCOL.md's caveat) as far as the
-toolhead sensor, just by polling stage 5 for longer. There's no separate
-"go further" command - keep polling until you see what you need.
+toolhead sensor, just by polling stage 5 for longer.
+
+UPDATE: there IS a "go further" step after all, we just hadn't found it
+yet when the paragraph above was written. Decompiling Creality's real
+official firmware (see FINDINGS.md in the private research log) showed
+the actual sequence continues past stage 5 with toolhead-side extruder
+moves interleaved with box stages 6 and 7 - this example still stops
+after stage 5 to keep the illustration short, but see cfs_cli.py's
+do_extrude() for the full (untested-live) continuation, which may be
+required for switching to a slot other than A to work at all.
 
 This example stops after a fixed 10 polls (enough to clear the buffer,
 not enough to necessarily reach the toolhead) to keep it short. Each
