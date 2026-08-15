@@ -71,7 +71,12 @@ remounted hardware.
 
 Move to phase 2.
 
-## Phase 2 — manual end-to-end swap ⚠️ BLOCKED (2026-08-14) — steps 1-3 done, step 4 hits a real unresolved issue
+## Phase 2 — manual end-to-end swap ✅ RESOLVED (2026-08-16) — see the update near the bottom of this section for how
+
+*(This section kept its whole debugging trail below on purpose - it took
+two long sessions and a real regression scare to get here, and the trail
+is useful if you ever hit something similar. Skip to "RESOLVED, for
+real" near the bottom if you just want the answer.)*
 
 This is the real test: does cut -> retrude -> extrude work **as a
 sequence**, not just individually.
@@ -149,6 +154,37 @@ error-code wiki): all slots flashing red together = communication error
 one specific slot = feeding/retraction jam (`FR2832`)** — exactly what
 we hit; solid/stuck sensor status = debris or a jammed micro-switch in
 the feed path.
+
+**✅ RESOLVED, for real (2026-08-16, next session, at the printer).**
+Two things, found together:
+
+1. **A regression, found and fixed first.** A 2-byte `EXTRUDE_PROCESS`
+   payload (`[slot, stage]`) looked correct based on examining Creality's
+   real official firmware, but broke live - even slot A, reliable for
+   sessions, started failing `PARAMS_ERR` immediately. Reverted to the
+   original 3-byte form (`[slot, stage, amount]`, `amount` usually
+   `0x00`) and slot A worked again instantly. Lesson: this specific CFS
+   unit's own onboard firmware doesn't necessarily match whatever
+   transport framing the *decompiled printer-side driver* code assumes -
+   trust live hardware behavior over source code when they disagree.
+2. **The actual fix: completing the full `EXTRUDE_PROCESS` sequence.**
+   With the payload regression fixed, `EXTRUDE --slot D` (never touched
+   successfully before, in either session) actually moved slot D's own
+   motor - a first. Stages 6 and 7 (with the toolhead `G0 E10 F35` /
+   `G0 E5 F10` prime moves between them, see `docs/PROTOCOL.md`) both
+   returned clean `OK`, `filament_detected` went true, and critically
+   `GET_FILAMENT_SENSOR_STATE`'s CONNECTIONS bank finally reported
+   `0x08` (slot D) instead of `0x01` (slot A) - the first time all
+   project long that the box's own "connected slot" state reflected
+   anything other than A. **Our previous EXTRUDE "successes" were only
+   ever the first half of the real sequence - enough to reach the
+   toolhead sensor, but never enough to make the box consider the load
+   properly finished, which is apparently a precondition for switching
+   slots at all.**
+
+Not yet re-verified on slots B/C specifically (only D so far), and
+`BOX_NOZZLE_CLEAN` plus stage 7's exact 3rd byte remain unconfirmed
+guesses - but neither blocked this result. Move to phase 3.
 
 ## Phase 3 — turn it into a macro
 

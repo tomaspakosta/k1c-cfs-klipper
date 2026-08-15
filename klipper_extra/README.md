@@ -42,21 +42,22 @@ CFS_STATUS
 Only move on to `CFS_RETRUDE SLOT=A` / `CFS_EXTRUDE SLOT=A` once that
 works and you're watching the printer.
 
-**⚠️ Known issue: slot A works reliably, B/C/D currently don't.**
-Extensive live testing found that switching to any slot other than A
-fails (`EXTRUDE_ERR8` / a red-blinking `FR2832` feed-jam) regardless of
-session history or the exact command payload sent - see
+**Switching slots ✅ works** — after a long debugging trail (see
 [`docs/TOOLCHANGE_TEST_PLAN.md`](../docs/TOOLCHANGE_TEST_PLAN.md) phase
-2 for the full writeup. `CFS_EXTRUDE` now includes an untested fix
-attempt (a toolhead "go to extrude position" move + an error-clear step
-before starting, both taken from a real factory `box.cfg` found on the
-same board variant) - if your printer's real extrude position differs
-from the factory default (`X148 Y225.3 Z30`), set `extrude_pos_x` /
-`extrude_pos_y` / `extrude_pos_z` in `[creality_cfs]`. This has **not
-been tested live** as of this writing - if slot switching still fails
-after this change, the next things to investigate are `BOX_NOZZLE_CLEAN`
-and a toolhead-side `BOX_EXTRUDER_EXTRUDE`-equivalent step, neither of
-which is implemented here yet.
+2), the fix turned out to be completing `EXTRUDE_PROCESS`'s full
+sequence (stages 6/7 plus toolhead-side prime moves between them) and
+marking the loaded slot via `SET_BOX_MODE`'s per-slot form at the end -
+confirmed live, switching to a slot other than A for the first time all
+project long. **Caveat: that confirmation was via `cfs_cli.py`
+(standalone), not this Klipper extra itself** - the extra's
+`cmd_CFS_EXTRUDE` was updated to match the same sequence but hasn't
+been loaded into a running Klipper and exercised yet; treat it as
+"should work, not yet independently verified as a Klipper extra." If
+your printer's real extrude position differs from the factory default
+used for the toolhead "go to extrude position" move (`X148 Y225.3
+Z30`), set `extrude_pos_x` / `extrude_pos_y` / `extrude_pos_z` in
+`[creality_cfs]`. `BOX_NOZZLE_CLEAN` and stage 7's exact 3rd payload
+byte remain unconfirmed guesses, but didn't block the live result.
 
 ## Fluidd / Mainsail display
 

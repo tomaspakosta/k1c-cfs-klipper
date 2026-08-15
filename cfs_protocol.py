@@ -249,17 +249,24 @@ class CFSClient:
     def tighten_up(self, addr: int, enable: bool) -> bytes:
         return self.send(addr, 0xFF, FN["TIGHTEN_UP_ENABLE"], bytes([0x01 if enable else 0x00]))
 
-    def extrude_stage(self, addr: int, slot: int, stage: int) -> bytes:
-        """Real wire payload is [slot, stage] (2 bytes) for every stage
-        except stage=7, which gets one extra fixed 0x02 byte appended -
-        confirmed by decompiling the real official firmware (see
-        FINDINGS.md). We previously always sent a 3rd 'amount' byte
-        (usually 0x00) for every stage; that was apparently harmless for
-        stages 0/4/5 (what we'd tested) but wasn't the real protocol."""
-        data = bytes([slot, stage])
-        if stage == 7:
-            data += b"\x02"
-        return self.send(addr, 0xFF, FN["EXTRUDE_PROCESS"], data)
+    def extrude_stage(self, addr: int, slot: int, stage: int, amount: int = 0x00) -> bytes:
+        """Real wire payload, confirmed LIVE on our own hardware: 3 bytes,
+        [slot, stage, amount]. We briefly changed this to a 2-byte
+        [slot, stage] form (matching what decompiling Creality's official
+        firmware's *host-side* driver code appeared to send - see
+        FINDINGS.md) but that regressed live: even slot A, which had
+        worked reliably for sessions, started failing PARAMS_ERR
+        immediately at stage 0 with the 2-byte form, and went back to
+        producing real (if partial/unclear) motor movement the moment we
+        reverted to 3 bytes. Our best guess: this specific CFS unit's own
+        onboard firmware (which is what we're actually talking to over
+        RS-485) doesn't necessarily match whatever transport-layer framing
+        the decompiled *printer-side* driver code assumes - trust live
+        hardware behavior over source code when they disagree. stage=7's
+        real amount byte is unconfirmed; passing 0x02 there (as the
+        decompiled source's special-cased extra byte) is a reasonable
+        guess, not yet verified live either way."""
+        return self.send(addr, 0xFF, FN["EXTRUDE_PROCESS"], bytes([slot, stage, amount]))
 
     def retrude_stage(self, addr: int, slot: int, stage: int) -> bytes:
         return self.send(addr, 0xFF, FN["RETRUDE_PROCESS"], bytes([slot, stage]))

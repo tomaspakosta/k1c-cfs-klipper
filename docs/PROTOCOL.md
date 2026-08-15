@@ -57,7 +57,7 @@ Boxes ship unaddressed and must be discovered + assigned an address each session
 | `SET_PRE_LOADING` | `0x0D` | data=`[slot_mask, phase]` — **not** `[slot_mask, enable]` as we first assumed, see below. |
 | `MEASURING_WHEEL` | `0x0E`? | **Untested by us, position inferred not confirmed.** `gitstonelabs` documents this at `0x0E` with a `[GET\|CLEAN]` action byte, response = a 4-byte big-endian IEEE-754 float (mm, negative, magnitude grows as filament feeds). Their `SET_PRE_LOADING` also sits at `0x0D`, matching ours exactly, and `0x0E` is immediately next in sequence on both sides and is otherwise a gap in our own table — reasonable to guess it lines up, but we've never sent this ourselves. See the note under `EXTRUDE_PROCESS` below for why this might matter. |
 | `TIGHTEN_UP_ENABLE` | `0x0F` | data=`[0x01]`/`[0x00]`. Wraps the `EXTRUDE_PROCESS` sequence. |
-| `EXTRUDE_PROCESS` | `0x10` | data=`[slot, stage]` — 2 bytes normally; stage `0x07` gets one extra fixed byte `0x02` appended (`[slot, 0x07, 0x02]`). We originally sent a 3rd byte on every stage (usually `0x00`); apparently harmless for stages 0/4/5 but not what the real protocol does. See the dedicated section below — this took the most work to get right. |
+| `EXTRUDE_PROCESS` | `0x10` | data=`[slot, stage, amount]` — 3 bytes, `amount` is usually `0x00`. **We briefly "corrected" this to a 2-byte `[slot, stage]` form** after decompiling Creality's official firmware's host-side driver code, which appeared to send exactly that — it regressed live (even slot A started failing `PARAMS_ERR` immediately) and was reverted. This specific CFS unit's own onboard firmware apparently doesn't match whatever transport framing that host-side code assumes; trust live hardware behavior over source code when they disagree. `stage=0x07`'s real `amount` byte is unconfirmed - we use `0x02` (the decompiled source's special-cased value for that stage) as an untested-in-isolation guess. See the dedicated section below — this took the most work to get right, in two separate sessions. |
 | `RETRUDE_PROCESS` | `0x11` | data=`[slot, stage]`, stages `0x00` then `0x01`. **Fully working, physically confirmed** — reels filament back onto the spool. Much simpler than extrude; no connection-motor precursor needed. |
 | `GET_VERSION_SN` | `0x14` | Returns an ASCII version/serial string. |
 | `GET_HARDWARE_STATUS` | `0x15` | Returns what look like per-channel voltage/current readings. |
@@ -100,9 +100,9 @@ That's the next thing to verify once the tube is connected.
 SET_BOX_MODE            data=[0x00, 0x01]              (IDLE mode, no slot)
 CTRL_CONNECTION_MOTOR_ACTION  data=[0x01]               (ACTION=EXTRUDE — connects the feed path)
 TIGHTEN_UP_ENABLE       data=[0x01]                     (enable)
-EXTRUDE_PROCESS         data=[slot, 0x00]               (stage 0)
-EXTRUDE_PROCESS         data=[slot, 0x04]               (stage 4)
-EXTRUDE_PROCESS         data=[slot, 0x05]               (stage 5 — poll this repeatedly;
+EXTRUDE_PROCESS         data=[slot, 0x00, 0x00]         (stage 0)
+EXTRUDE_PROCESS         data=[slot, 0x04, 0x00]         (stage 4)
+EXTRUDE_PROCESS         data=[slot, 0x05, 0x00]         (stage 5 — poll this repeatedly;
                                                           this is where the motor actually runs.
                                                           The response's data bytes are live
                                                           telemetry and should visibly change
@@ -112,15 +112,19 @@ EXTRUDE_PROCESS         data=[slot, 0x05]               (stage 5 — poll this r
                                                           buffer, ~40 polls at a ~0.4s interval
                                                           reached the toolhead sensor.)
 --- everything below this line was missing from every version of this repo
-    before 2026-08-15 - we always stopped after stage 5 and went straight
-    to cleanup. See "What we'd been missing entirely" below. ---
+    before 2026-08-15/16 - we always stopped after stage 5 and went
+    straight to cleanup. See "What we'd been missing entirely" below. ---
 M83                                                     (toolhead: relative extrusion mode)
 G0 E10 F35                                              (toolhead: slow prime move)
-EXTRUDE_PROCESS         data=[slot, 0x06]               (stage 6)
+EXTRUDE_PROCESS         data=[slot, 0x06, 0x00]         (stage 6)
 M83
 G0 E5 F10                                               (toolhead: slower prime move)
-EXTRUDE_PROCESS         data=[slot, 0x07, 0x02]         (stage 7 — note the extra byte)
-SET_BOX_MODE            data=[slot, 0x00]               (mark this slot PRINT-mode loaded)
+EXTRUDE_PROCESS         data=[slot, 0x07, 0x02]         (stage 7 — the 3rd byte here is an
+                                                          unconfirmed guess, see the command
+                                                          table above)
+SET_BOX_MODE            data=[slot, 0x00]               (mark this slot PRINT-mode loaded —
+                                                          **this is the step that finally made
+                                                          slot switching work**, confirmed live)
 --- cleanup, same as before ---
 TIGHTEN_UP_ENABLE       data=[0x00]                     (disable)
 CTRL_CONNECTION_MOTOR_ACTION  data=[0x00]                (ACTION=STOP — cleanup)
@@ -206,10 +210,17 @@ why a completed extrude could leave a latched error status (we never
 told the box the load actually finished, the "proper" way); and why
 trying to switch to a different slot afterward always failed the same
 way regardless of what we varied (the box may never have exited its
-"mid-load" state for the first slot in the first place). **This has
-been added to `klipper_extra/creality_cfs.py` and `cfs_cli.py` as of
-2026-08-15 but is not yet tested live** — see those files' comments and
-`TOOLCHANGE_TEST_PLAN.md` phase 2 for status.
+"mid-load" state for the first slot in the first place).
+
+**Confirmed live, 2026-08-16.** After also finding and reverting a
+regression in `EXTRUDE_PROCESS`'s payload byte count (see the command
+table above), running this full sequence against slot D — never
+successfully touched before, across two separate sessions — actually
+worked: stages 6 and 7 both returned clean `OK`, `filament_detected`
+went true, and `GET_FILAMENT_SENSOR_STATE`'s CONNECTIONS bank reported
+`0x08` (slot D), the first time all project long the box's own
+"connected slot" state reflected anything other than A. See
+`TOOLCHANGE_TEST_PLAN.md` phase 2 for the full trail.
 
 ## Firmware background (if you want to go deeper)
 

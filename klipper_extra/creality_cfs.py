@@ -322,14 +322,23 @@ class CrealityCFS:
         self._send(self.box_addr, 0xFF, FN["TIGHTEN_UP_ENABLE"], bytes([0x01]))
         time.sleep(0.3)
 
-        # EXTRUDE_PROCESS payload is [slot, stage] - see the header comment.
-        self._send(self.box_addr, 0xFF, FN["EXTRUDE_PROCESS"], bytes([slot, 0x00]))
+        # EXTRUDE_PROCESS payload is [slot, stage, amount] - 3 bytes,
+        # amount usually 0x00. We briefly tried a 2-byte [slot, stage] form
+        # (matching what decompiling Creality's official *host-side*
+        # driver code appeared to send - see FINDINGS.md) but that
+        # regressed live: even slot A, reliable for many sessions, started
+        # failing PARAMS_ERR immediately with 2 bytes, and went back to
+        # producing real motor movement the moment we reverted to 3.
+        # Trust live hardware behavior over decompiled source when they
+        # disagree - this box's own onboard firmware apparently doesn't
+        # match whatever transport framing the host-side code assumes.
+        self._send(self.box_addr, 0xFF, FN["EXTRUDE_PROCESS"], bytes([slot, 0x00, 0x00]))
         time.sleep(0.3)
-        self._send(self.box_addr, 0xFF, FN["EXTRUDE_PROCESS"], bytes([slot, 0x04]))
+        self._send(self.box_addr, 0xFF, FN["EXTRUDE_PROCESS"], bytes([slot, 0x04, 0x00]))
         time.sleep(0.3)
 
         for _ in range(polls):
-            self._send(self.box_addr, 0xFF, FN["EXTRUDE_PROCESS"], bytes([slot, 0x05]))
+            self._send(self.box_addr, 0xFF, FN["EXTRUDE_PROCESS"], bytes([slot, 0x05, 0x00]))
             time.sleep(0.4)
 
         # Stages 6/7 + the toolhead-side prime moves between them - see the
@@ -337,11 +346,14 @@ class CrealityCFS:
         self.gcode.run_script_from_command("M83")
         self.gcode.run_script_from_command("G0 E10 F35")
         time.sleep(0.3)
-        self._send(self.box_addr, 0xFF, FN["EXTRUDE_PROCESS"], bytes([slot, 0x06]))
+        self._send(self.box_addr, 0xFF, FN["EXTRUDE_PROCESS"], bytes([slot, 0x06, 0x00]))
         time.sleep(0.3)
         self.gcode.run_script_from_command("M83")
         self.gcode.run_script_from_command("G0 E5 F10")
         time.sleep(0.3)
+        # stage 7's real 3rd byte is unconfirmed live - 0x02 is the
+        # decompiled source's special-cased extra byte, used here as a
+        # reasonable guess, not yet verified either way.
         self._send(self.box_addr, 0xFF, FN["EXTRUDE_PROCESS"], bytes([slot, 0x07, 0x02]))
         time.sleep(0.3)
         # Mark this specific slot as the active PRINT-mode slot - payload
