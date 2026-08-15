@@ -1,24 +1,62 @@
-# Klipper extra (work in progress)
+# Klipper extra
 
 `creality_cfs.py` wraps the protocol validated elsewhere in this repo into
 a real Klipper extra — gcode commands and a background status poll,
 instead of standalone scripts you run by hand.
 
-**Status: written, not yet loaded into a running Klipper.** The protocol
-calls it makes (discovery, addressing, `RETRUDE_PROCESS`, `EXTRUDE_PROCESS`
-with the `CTRL_CONNECTION_MOTOR_ACTION` precursor) are the same ones
-validated live elsewhere in this repo — but this specific file, as a piece
-of Klipper integration code (config parsing, gcode command registration,
-reactor timer), hasn't been installed and tested yet. Review it before
-trusting it, and test each command individually and supervised the first
-time, the same way everything else in this repo was validated.
+**Status: installed and loading cleanly in a real Klipper (2026-08-16),
+but not yet usable end-to-end — see "Known issue" below.** The extra
+itself loads without config errors, registers all its gcode commands
+(confirmed via `HELP`), and the underlying protocol calls are the same
+ones validated live elsewhere in this repo. What doesn't work yet: the
+box never gets marked as addressed inside this extra (see below), so
+`CFS_STATUS`/`CFS_RETRUDE`/`CFS_EXTRUDE` aren't usable as-is. `cfs_cli.py`
+(the standalone tool) remains the reliable way to actually drive the box
+for now.
 
 It also has a known architectural limitation, documented in the file's own
 header comment: it uses blocking serial calls from gcode command handlers,
 which isn't the ideal way to integrate with Klipper's single-threaded
 reactor. Fine for occasional manual commands; not yet built the "right" way.
 
-## Install (once you've reviewed it)
+## ⚠️ Known issue: box never gets addressed inside this extra
+
+Confirmed live: the box responds reliably to `cfs_cli.py status` (a
+fresh connection opened and closed each time) but this extra's own
+discovery attempt at `klippy:connect` - the *exact same wire request* -
+consistently gets no reply, even seconds apart on the same box. Tried
+and didn't fix it: a `CFS_RECONNECT` command that closes/reopens the
+serial connection and retries; a 3-attempt retry loop with a fresh
+connection each try (all 3 attempts failed identically, confirmed in
+`klippy.log`). The box is not the problem - something about this
+extra's execution context (a persistent connection, inside Klipper's
+reactor/greenlet framework) differs from the standalone tool's
+(fresh connection, plain synchronous script) in a way that matters here.
+**Not yet root-caused** - see `FINDINGS.md` in the private research log
+for the full diagnostic trail and what to try next (byte-level TX/RX
+logging inside `_send()` is the leading next step).
+
+## Two real Klipper gotchas found installing this, worth knowing regardless of this project
+
+1. **Never use Jinja2 `{# comment #}` syntax inside a macro's `gcode:`
+   block.** Klipper's config loader strips everything after the *first*
+   `#` on every raw line - including inside a multi-line `gcode:` value -
+   before Jinja2 ever sees it. A Jinja2 comment's own `#` characters trip
+   this, silently truncating the line and producing a confusing
+   `jinja2.exceptions.TemplateSyntaxError: unexpected 'end of template'`
+   pointing nowhere near the real cause. Hit this in two of this repo's
+   own macro drafts - both fixed by just removing the `{# #}` comments.
+2. **On at least this printer's community firmware stack (Guilouz
+   Helper-Script), Moonraker's `firmware_restart`/`restart` API calls did
+   not reliably reload edited Python extras** - the `klippy.py` process
+   ID stayed the same across "restarts", and code changes weren't picked
+   up. What did work: `kill <klippy.py pid>` followed by
+   `/etc/init.d/S55klipper_service start` (find the exact service name
+   with `ls /etc/init.d/ | grep -i klip` on your unit). Worth checking
+   for if your own extra edits don't seem to take effect after a normal
+   restart.
+
+## Install
 
 ```bash
 cp creality_cfs.py ~/klipper/klippy/extras/creality_cfs.py
@@ -33,13 +71,16 @@ baud: 230400
 box_addr: 1
 ```
 
-Restart Klipper, then test read-only first:
+Restart Klipper (see the gotcha above if changes don't seem to apply),
+then test read-only first:
 
 ```
 CFS_STATUS
 ```
 
-Only move on to `CFS_RETRUDE SLOT=A` / `CFS_EXTRUDE SLOT=A` once that
+If it says "not addressed", try `CFS_RECONNECT` - but see the known
+issue above, this currently doesn't reliably help either. Only move on
+to `CFS_RETRUDE SLOT=A` / `CFS_EXTRUDE SLOT=A` once status genuinely
 works and you're watching the printer.
 
 **Switching slots ✅ works** — after a long debugging trail (see

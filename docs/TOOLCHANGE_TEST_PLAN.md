@@ -297,10 +297,34 @@ not a protocol or box problem. Not yet re-attempted with a fresh spool.
 The individual pieces (cut, pre-retract, retrude, extrude, slot
 switching) all remain independently confirmed working - this was a
 one-off physical snag on this particular attempt, not a new protocol
-issue. Also note: `klipper_extra/creality_cfs.py` has still never been
-loaded into a real running Klipper - all testing so far, including this
-attempt, used `cfs_cli.py` standalone plus manual G-code calls, not the
-actual Klipper extra or a real `CFS_TOOLCHANGE` macro call.
+issue.
+
+**Update, 2026-08-16: `klipper_extra/creality_cfs.py` installed into a
+real running Klipper for the first time.** `[creality_cfs]` +
+`[save_variables]` added to `printer.cfg` (backed up first),
+`cfs_toolchange.cfg` (from `toolchange_draft.cfg`) included. The extra
+loads cleanly and registers all its commands (`CFS_STATUS`,
+`CFS_RETRUDE`, `CFS_EXTRUDE`, `CFS_TOOLCHANGE`, etc. - confirmed via
+`HELP`), but **hit a real, still-unsolved bug: the box never gets
+marked as addressed inside this extra**, even though it responds
+reliably to the standalone `cfs_cli.py` tool seconds apart on the same
+connection attempt. A `CFS_RECONNECT` command and a 3-attempt retry
+loop (both closing/reopening the serial connection) didn't fix it -
+all attempts failed identically, confirmed in `klippy.log`. Not yet
+root-caused; see `klipper_extra/README.md`'s "Known issue" section and
+`FINDINGS.md` in the private research log for the full diagnostic
+trail. **Practical result: `CFS_TOOLCHANGE` as an actual macro call
+has still never been exercised** - `cfs_cli.py` remains the reliable
+way to drive the box.
+
+Along the way, found and fixed a real, general Klipper gotcha that bit
+two of this repo's own macro drafts: **Jinja2 `{# comment #}` syntax
+inside a `gcode:` block is broken**, because Klipper's config loader
+strips everything after the first `#` on every raw line - including
+inside multi-line values - before Jinja2 ever sees it. Now covered by
+an automated test (`tests/test_macro_syntax.py`) that compiles every
+macro's template using Klipper's actual preprocessing and custom
+Jinja2 delimiters, so this can't silently regress.
 
 **Pre-test improvements added, not yet live-tested (2026-08-16, research
 between physical sessions):**

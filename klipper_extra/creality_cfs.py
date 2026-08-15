@@ -181,6 +181,13 @@ class CrealityCFS:
                                      "- mostly for diagnostics; CLOSE is run automatically as a reset "
                                      "step at the start of CFS_RETRUDE/CFS_EXTRUDE. RUN/TIGHT are slow "
                                      "(~38s/slot) and untested by us - use supervised.")
+        gcode.register_command("CFS_RECONNECT", self.cmd_CFS_RECONNECT,
+                                desc="CFS_RECONNECT - retry discovery/addressing manually. The "
+                                     "automatic attempt at klippy:connect is a single try with no "
+                                     "retry (see KNOWN LIMITATION at the top of this file) and can "
+                                     "lose a race with the USB device settling - if CFS_STATUS says "
+                                     "'not addressed' after startup even though the box is known "
+                                     "good, run this instead of a full restart.")
 
     # -- low level transport -------------------------------------------
 
@@ -221,18 +228,37 @@ class CrealityCFS:
                 pass
             self.ser = None
 
-    def _discover_and_address(self):
-        resp = self._send(BROADCAST_ALL_BOXES, 0x00, FN["CMD_GET_SLAVE_INFO"],
-                           bytes([BROADCAST_ALL_BOXES, BROADCAST_ALL_BOXES]))
-        if len(resp) < 20:
-            logging.warning("creality_cfs: no CFS box responded to discovery")
-            return
-        uid = resp[7:19]
-        self._send(BROADCAST_ALL_BOXES, 0x00, FN["CMD_SET_SLAVE_ADDR"],
-                    bytes([self.box_addr]) + uid)
-        self.addressed = True
-        logging.info("creality_cfs: addressed box at %#04x, uid=%s",
-                     self.box_addr, uid.hex())
+    def _discover_and_address(self, attempts=3, retry_pause=1.5):
+        # A single try here was found live to be unreliable - Klipper's
+        # own first attempt at klippy:connect consistently got no reply
+        # even when the box was confirmed healthy and responsive to a
+        # separate, freshly-opened connection moments later (see
+        # FINDINGS.md). Retrying a few times, closing and reopening the
+        # serial connection between attempts (not just resending on the
+        # same one), reduced but did not fully eliminate this - treat it
+        # as a known, still-not-fully-understood rough edge, not solved.
+        for attempt in range(1, attempts + 1):
+            resp = self._send(BROADCAST_ALL_BOXES, 0x00, FN["CMD_GET_SLAVE_INFO"],
+                               bytes([BROADCAST_ALL_BOXES, BROADCAST_ALL_BOXES]))
+            if len(resp) >= 20:
+                uid = resp[7:19]
+                self._send(BROADCAST_ALL_BOXES, 0x00, FN["CMD_SET_SLAVE_ADDR"],
+                            bytes([self.box_addr]) + uid)
+                self.addressed = True
+                logging.info("creality_cfs: addressed box at %#04x, uid=%s "
+                             "(attempt %d/%d)", self.box_addr, uid.hex(),
+                             attempt, attempts)
+                return
+            logging.warning("creality_cfs: no CFS box responded to discovery "
+                            "(attempt %d/%d)", attempt, attempts)
+            if attempt < attempts:
+                if self.ser is not None:
+                    try:
+                        self.ser.close()
+                    except Exception:
+                        pass
+                    self.ser = None
+                time.sleep(retry_pause)
 
     def _poll_timer(self, eventtime):
         if self.addressed:
@@ -276,7 +302,8 @@ class CrealityCFS:
 
     def cmd_CFS_STATUS(self, gcmd):
         if not self.addressed:
-            gcmd.respond_info("CFS box not addressed (no response at klippy:connect)")
+            gcmd.respond_info("CFS box not addressed (no response at klippy:connect) - "
+                               "try CFS_RECONNECT")
             return
         bitmask = self.last_status.get("material_bitmask")
         if bitmask is not None:
@@ -284,6 +311,31 @@ class CrealityCFS:
             gcmd.respond_info("CFS: material loaded in slots: %s" % (", ".join(loaded) or "none"))
         else:
             gcmd.respond_info("CFS: no status polled yet")
+
+    def cmd_CFS_RECONNECT(self, gcmd):
+        # Close and reopen the serial connection first, not just retry on
+        # the existing one - a serial object that's been open since a
+        # failed first attempt at klippy:connect can apparently get stuck
+        # in a way a plain retry on the same connection doesn't recover
+        # from (matches this project's live experience: the standalone
+        # cfs_cli.py tool, which opens a fresh connection every time,
+        # kept working throughout even when this extra's persistent one
+        # didn't - see FINDINGS.md).
+        if self.ser is not None:
+            try:
+                self.ser.close()
+            except Exception:
+                pass
+            self.ser = None
+        try:
+            self._discover_and_address()
+        except Exception as e:
+            raise gcmd.error("CFS_RECONNECT failed: %s" % (e,))
+        if self.addressed:
+            gcmd.respond_info("CFS_RECONNECT: addressed OK")
+        else:
+            gcmd.respond_info("CFS_RECONNECT: still not addressed - box may not be "
+                               "responding right now, check it physically")
 
     def _toolhead_filament_detected(self):
         sensor = self.printer.lookup_object(
