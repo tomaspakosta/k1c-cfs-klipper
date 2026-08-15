@@ -115,6 +115,29 @@ long reel-in phase. **Retest on a slot that hasn't been touched yet
 this session** (full spool-side material, never extruded/retruded)
 before drawing a real conclusion.
 
+**Update, next session: 7 live attempts (B×3, C×1, D×3, including on a
+freshly-booted box that had never touched slot A) all failed the same
+way — this isn't a session-history or payload-length issue, slot A
+currently just seems to be the only one that works.** The most promising
+untested lead now: a real factory `box.cfg` found on the same board
+variant (`CR4CU220812S12`) shows the *official* Creality load sequence
+includes `BOX_GO_TO_EXTRUDE_POS` (moving the toolhead to a specific
+position, `X148/Y225.3/Z30` by factory default) and an error-clear step
+*before* starting — both of which our own testing never included.
+Notably, that other printer's official `box.py` **did work on all 4
+slots at first** using the full sequence, before developing an
+unexplained slot-A-only regression in a later session (see the CFS
+project's memory / `FINDINGS.md` for the full story) — so this isn't
+guaranteed to fix it, but it's the one real piece of the official
+sequence we haven't tried. Added (untested) to
+`klipper_extra/creality_cfs.py`'s `CFS_EXTRUDE` — see that file's
+`cmd_CFS_EXTRUDE` for details before testing it live. Full 2-byte
+`CTRL_CONNECTION_MOTOR_ACTION` payload test, a claimed-but-unverified
+"GPIO slot selector" theory (checked against the reference source —
+not real, that GPIO is for the shared buffer's fill sensor, unrelated),
+and a `gitstonelabs` mock-suite dead-end are all written up in
+`FINDINGS.md` for anyone who wants the full trail before re-testing.
+
 **If something snags or doesn't retract cleanly at step 3**: stop and
 look at it physically before continuing - a botched retrude right after a
 cut is exactly the kind of thing that can jam a Bowden path. Don't push

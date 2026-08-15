@@ -30,6 +30,12 @@
 #   serial: /dev/ttyUSB0
 #   baud: 230400
 #   box_addr: 1
+#   # optional, see the CFS_EXTRUDE "go to extrude position" note further
+#   # down - defaults below are from a factory box.cfg on the same board
+#   # variant, override if yours differ:
+#   extrude_pos_x: 148.0
+#   extrude_pos_y: 225.3
+#   extrude_pos_z: 30.0
 
 import logging
 import time
@@ -108,6 +114,22 @@ class CrealityCFS:
         self.baud = config.getint("baud", 230400)
         self.box_addr = config.getint("box_addr", 1)
         self.poll_interval = config.getfloat("poll_interval", 5.0, above=0.0)
+
+        # "Go to extrude position" before EXTRUDE_PROCESS - a step our own
+        # testing NEVER did, taken from a real factory box.cfg found on the
+        # same board variant (CR4CU220812S12) restored from /rom on a
+        # different K1C. That printer's official box.py sequence is
+        # BOX_ERROR_CLEAR -> ... -> BOX_GO_TO_EXTRUDE_POS -> BOX_NOZZLE_CLEAN
+        # -> BOX_EXTRUDE_MATERIAL -> BOX_EXTRUDER_EXTRUDE -> ... and worked
+        # on all 4 slots there (until a later, still-unexplained regression
+        # to slot-A-only - see the project memory / FINDINGS.md). We have
+        # NEVER tested this position move ourselves - defaults below are
+        # copied verbatim from that factory box.cfg, override in printer.cfg
+        # if your machine's coordinates differ.
+        self.extrude_pos_x = config.getfloat("extrude_pos_x", 148.0)
+        self.extrude_pos_y = config.getfloat("extrude_pos_y", 225.3)
+        self.extrude_pos_z = config.getfloat("extrude_pos_z", 30.0)
+        self.extrude_move_speed = config.getfloat("extrude_move_speed", 3600.0, above=0.0)
 
         self.ser = None
         self.addressed = False
@@ -230,14 +252,57 @@ class CrealityCFS:
         gcmd.respond_info("CFS_RETRUDE slot=%s sent" % slot_letter)
 
     def cmd_CFS_EXTRUDE(self, gcmd):
+        # UNTESTED CHANGE (not yet run live - see FINDINGS.md / project
+        # memory for the full story): this now adds two steps taken from a
+        # real factory box.cfg (same board variant, a different K1C) that
+        # our own testing never included, in an attempt to fix "only slot A
+        # ever works, B/C/D fail with EXTRUDE_ERR8/FR2832 regardless of
+        # session history or payload variations we've tried":
+        #   1. An error-clear-equivalent BEFORE starting (the stock sequence
+        #      is BOX_ERROR_CLEAR -> ... -> BOX_EXTRUDE_MATERIAL, error-clear
+        #      first, not just cleanup after). We don't know what stock
+        #      BOX_ERROR_CLEAR actually puts on the wire (closed-source
+        #      box.py) - gitstonelabs' own same-named command is host-side
+        #      only. Best-effort substitute: read GET_BOX_STATE so a latched
+        #      error is at least visible in the log, then send SET_BOX_MODE
+        #      IDLE same as our existing post-run cleanup.
+        #   2. BOX_GO_TO_EXTRUDE_POS - moving the toolhead to a specific
+        #      position BEFORE EXTRUDE_PROCESS. We have NEVER done this.
+        #      Coordinates default to the factory box.cfg's values (see
+        #      __init__) - override in printer.cfg if yours differ.
+        # IMPORTANT: this still doesn't implement BOX_NOZZLE_CLEAN or
+        # BOX_EXTRUDER_EXTRUDE (a toolhead-side extruder step the stock
+        # sequence runs AFTER the box-side extrude, purpose/parameters
+        # unknown to us) - if slot switching still fails with this change,
+        # those are the next things to investigate, not more RS485 payload
+        # variations.
         slot_letter = gcmd.get("SLOT", "A").upper()
         if slot_letter not in SLOT_BYTES:
             raise gcmd.error("SLOT must be one of A, B, C, D")
         slot = SLOT_BYTES[slot_letter]
         polls = gcmd.get_int("POLLS", 20, minval=1, maxval=200)
 
+        toolhead = self.printer.lookup_object("toolhead")
+        homed = toolhead.get_status(self.reactor.monotonic())["homed_axes"]
+        if not all(axis in homed for axis in "xyz"):
+            raise gcmd.error("CFS_EXTRUDE: home the printer first (G28) - "
+                              "refusing to move to the extrude position unhomed")
+
+        # Step 1: error-clear-equivalent (see note above - best effort only)
+        status = self._send(self.box_addr, 0xFF, FN["GET_BOX_STATE"])
+        if status:
+            gcmd.respond_info("CFS_EXTRUDE: pre-run GET_BOX_STATE=%s" % status.hex())
         self._send(self.box_addr, 0xFF, FN["SET_BOX_MODE"], bytes([0x00, 0x01]))
         time.sleep(0.3)
+
+        # Step 2: BOX_GO_TO_EXTRUDE_POS equivalent - untested, see note above
+        self.gcode.run_script_from_command("SAVE_GCODE_STATE NAME=CFS_EXTRUDE")
+        self.gcode.run_script_from_command(
+            "G90\nG1 X%.2f Y%.2f Z%.2f F%.0f" % (
+                self.extrude_pos_x, self.extrude_pos_y, self.extrude_pos_z,
+                self.extrude_move_speed))
+        self.gcode.run_script_from_command("M400")
+
         self._send(self.box_addr, 0xFF, FN["CTRL_CONNECTION_MOTOR_ACTION"], bytes([0x01]))
         time.sleep(0.5)
         self._send(self.box_addr, 0xFF, FN["TIGHTEN_UP_ENABLE"], bytes([0x01]))
@@ -259,6 +324,9 @@ class CrealityCFS:
         # itself succeeded (toolhead sensor confirmed). A fresh
         # SET_BOX_MODE(IDLE) clears it - confirmed live on real hardware.
         self._send(self.box_addr, 0xFF, FN["SET_BOX_MODE"], bytes([0x00, 0x01]))
+
+        # RESTORE_POSITION equivalent
+        self.gcode.run_script_from_command("RESTORE_GCODE_STATE NAME=CFS_EXTRUDE")
         gcmd.respond_info("CFS_EXTRUDE slot=%s complete (%d polls)" % (slot_letter, polls))
 
 

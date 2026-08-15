@@ -42,6 +42,22 @@ CFS_STATUS
 Only move on to `CFS_RETRUDE SLOT=A` / `CFS_EXTRUDE SLOT=A` once that
 works and you're watching the printer.
 
+**⚠️ Known issue: slot A works reliably, B/C/D currently don't.**
+Extensive live testing found that switching to any slot other than A
+fails (`EXTRUDE_ERR8` / a red-blinking `FR2832` feed-jam) regardless of
+session history or the exact command payload sent - see
+[`docs/TOOLCHANGE_TEST_PLAN.md`](../docs/TOOLCHANGE_TEST_PLAN.md) phase
+2 for the full writeup. `CFS_EXTRUDE` now includes an untested fix
+attempt (a toolhead "go to extrude position" move + an error-clear step
+before starting, both taken from a real factory `box.cfg` found on the
+same board variant) - if your printer's real extrude position differs
+from the factory default (`X148 Y225.3 Z30`), set `extrude_pos_x` /
+`extrude_pos_y` / `extrude_pos_z` in `[creality_cfs]`. This has **not
+been tested live** as of this writing - if slot switching still fails
+after this change, the next things to investigate are `BOX_NOZZLE_CLEAN`
+and a toolhead-side `BOX_EXTRUDER_EXTRUDE`-equivalent step, neither of
+which is implemented here yet.
+
 ## Fluidd / Mainsail display
 
 You don't need a custom panel for this. The extra registers one small
