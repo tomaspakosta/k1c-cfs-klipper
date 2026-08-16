@@ -4,11 +4,14 @@
 a real Klipper extra — gcode commands and a background status poll,
 instead of standalone scripts you run by hand.
 
-**Status: installed and confirmed working in a real Klipper (2026-08-16).**
-The extra loads without config errors, registers all its gcode commands
-(confirmed via `HELP`), and `CFS_STATUS` correctly reports material in
-all 4 slots live through Moonraker. See "Addressing bug - found and
-fixed" below for the one real bug this hit along the way.
+**Status: fully confirmed working end-to-end in a real Klipper
+(2026-08-16), including a slot switch.** `CFS_STATUS`, `CFS_RETRUDE
+SLOT=A`, and `CFS_EXTRUDE SLOT=B` have all run cleanly as real gcode
+commands through Moonraker - the box, the toolhead move, and the tip-form
+unload all worked together, with no manual assist and no crashes. Getting
+here took finding and fixing three real bugs along the way - see the
+sections below. `cmd_CFS_TOOLCHANGE` (the combined swap macro) is the
+next thing to exercise as a whole.
 
 It also has a known architectural limitation, documented in the file's own
 header comment: it uses blocking serial calls from gcode command handlers,
@@ -97,17 +100,22 @@ printer.
 (2026-08-16) - full tip-form unload sequence, ended with "toolhead sensor
 clear, unload complete" and "confirmed clear", no manual assist needed.
 
-**`CFS_EXTRUDE` hit two real problems live and is not yet a clean pass:**
+**`CFS_EXTRUDE` ✅ confirmed working as a real Klipper extra command too**
+(2026-08-16) - `CFS_EXTRUDE SLOT=B` completed cleanly ("CFS_EXTRUDE
+slot=B complete (20 polls)"), a genuine slot switch through the actual
+gcode command path. Getting there took finding and fixing two real
+problems live:
 
 1. **A reactor-stall heater fault.** This extra's accumulated
    `time.sleep()` calls (see KNOWN LIMITATION at the top of the file)
    stalled Klipper's reactor long enough that `verify_heater` missed its
    update window and tripped a false "not heating at expected rate"
    shutdown mid-run. Fixed: every `time.sleep()` in this file is now
-   `self._pause()` (`reactor.pause()`, cooperative). **Not fully fixed**:
-   `_send()`'s own blocking `ser.read()` calls (especially the ~20x poll
-   loop) are a real, deeper source of the same class of stall and can
-   still cause problems - see the file's KNOWN LIMITATION comment.
+   `self._pause()` (`reactor.pause()`, cooperative) - confirmed live this
+   no longer trips. **Not fully fixed**: `_send()`'s own blocking
+   `ser.read()` calls (especially the ~20x poll loop) are a real, deeper
+   source of the same class of stall and could still cause problems on a
+   slower/flakier connection - see the file's KNOWN LIMITATION comment.
 2. **A real physical collision.** The "go to extrude position" move used
    to default to `X148 Y225.3 Z30`, copied verbatim (never physically
    tested by us) from a factory `box.cfg` found on a different K1C. Live
@@ -119,13 +127,15 @@ clear, unload complete" and "confirmed clear", no manual assist needed.
    same careful way the cut/purge positions were (small jogs from the
    console, watching closely, well clear of anything - see
    `docs/MANUAL.md`). The move itself is also now split into separate
-   Z-then-XY-then-Z legs instead of one diagonal `G1`, so a wrong number
-   is less likely to carve an unexpected shortcut through something solid
-   - that's not a substitute for calibrating real numbers for your
-   machine, just a smaller blast radius if you haven't yet.
+   Z-then-XY-then-Z legs instead of one diagonal `G1`. On this printer, a
+   careful step-by-step live jog (starting high and clear, then lowering
+   in small steps) found `X148 Y225 Z35` as a safe, working position -
+   2mm of margin above the ~33mm minimum already established for the
+   nearby purge station. Your printer's safe numbers will likely differ -
+   calibrate your own, don't copy these.
 
 `BOX_NOZZLE_CLEAN` and stage 7's exact 3rd payload byte remain
-unconfirmed guesses.
+unconfirmed guesses, but didn't block the live result.
 
 ## Fluidd / Mainsail display
 

@@ -318,8 +318,25 @@ falling back to broadcast discovery only if that fails - see
 for the full diagnostic trail. **Confirmed live: `CFS_STATUS` now
 correctly reports material in all 4 slots through the real gcode
 command path**, addressed automatically at `klippy:connect`, no manual
-`CFS_RECONNECT` needed. `CFS_RETRUDE`/`CFS_EXTRUDE`/`CFS_TOOLCHANGE`
-(real motor commands) are the next thing to exercise, supervised.
+`CFS_RECONNECT` needed.
+
+**Same session, continued: `CFS_RETRUDE SLOT=A` and `CFS_EXTRUDE
+SLOT=B` both confirmed working end-to-end as real Klipper extra gcode
+commands** - the first genuine slot switch (A→B) driven entirely
+through the extra rather than `cfs_cli.py`. Getting `CFS_EXTRUDE` there
+took finding and fixing two more real problems live: (1) this extra's
+accumulated `time.sleep()` calls stalled Klipper's reactor long enough
+to trip a false heater-fault shutdown - fixed by switching to
+cooperative `reactor.pause()`; (2) the "go to extrude position" move's
+old default coordinates (copied from a different K1C, never physically
+tested) crashed the toolhead into this printer's frame near a camera
+mount, requiring an emergency stop. Fixed by removing the unsafe
+default entirely (`CFS_EXTRUDE` now refuses to run without an
+explicitly calibrated position) and calibrating a real safe position
+live, the same careful step-by-step jog method used for the cut/purge
+positions - see `klipper_extra/README.md` for the full story and the
+calibrated numbers. `CFS_TOOLCHANGE` (the combined macro) is the next
+thing to exercise as a whole.
 
 Along the way, found and fixed a real, general Klipper gotcha that bit
 two of this repo's own macro drafts: **Jinja2 `{# comment #}` syntax
