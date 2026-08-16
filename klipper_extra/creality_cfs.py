@@ -55,6 +55,7 @@
 #   toolhead_sensor_name: filament_sensor_2
 
 import logging
+import struct
 import time
 
 try:
@@ -72,10 +73,12 @@ FN = {
     "GET_FILAMENT_SENSOR_STATE": 0x08,
     "GET_BOX_STATE": 0x0A,
     "SET_PRE_LOADING": 0x0D,
+    "GET_MEASURING_WHEEL": 0x0E,
     "TIGHTEN_UP_ENABLE": 0x0F,
     "EXTRUDE_PROCESS": 0x10,
     "RETRUDE_PROCESS": 0x11,
     "GET_VERSION_SN": 0x14,
+    "MOVE_DISTANCE": 0x31,
     "CMD_SET_SLAVE_ADDR": 0xA0,
     "CMD_GET_SLAVE_INFO": 0xA1,
     "CMD_ONLINE_CHECK": 0xA2,
@@ -117,6 +120,21 @@ def crc8(data):
         for _ in range(8):
             crc = ((crc << 1) ^ 0x07 if crc & 0x80 else crc << 1) & 0xFF
     return crc
+
+
+def decode_measuring_wheel(data):
+    """Decode a 4-byte measuring-wheel/odometer reading - big-endian
+    IEEE-754 float, mm, negative and growing in magnitude while material
+    actively feeds. Duplicated from cfs_protocol.py (same reasoning as
+    TIP_FORM_STEPS - self-contained file). Confirmed correct against our
+    own real EXTRUDE_PROCESS telemetry, and independently re-derived
+    2026-08-17 from decompiled reference firmware's own
+    get_measuring_wheel() - its convoluted big-endian-int-then-repack-
+    little-endian-float dance is mathematically identical to a plain
+    big-endian float unpack, see FINDINGS.md."""
+    if len(data) != 4:
+        return None
+    return struct.unpack(">f", data)[0]
 
 
 def build_frame(slave_addr, status, function_code, data=b""):
@@ -169,19 +187,32 @@ class CrealityCFS:
         # position is easier to e-stop in time at a lower speed.
         self.extrude_move_speed = config.getfloat("extrude_move_speed", 1500.0, above=0.0)
 
-        # Toolhead-side "priming" moves between EXTRUDE_PROCESS stages
-        # 5->6->7 (see cmd_CFS_EXTRUDE below) - this is the handoff moment
-        # where the toolhead extruder is meant to grab filament the box
-        # has pushed up to the sensor and start pulling it the rest of the
-        # way, while the box keeps feeding. UPDATED 2026-08-16: the
-        # original 10mm/5mm distances (from decompiled reference code)
-        # were live-confirmed insufficient on our unit - filament reached
-        # the sensor but the extruder gear never actually got a grip on it
-        # (nothing came out the nozzle). Raised defaults to 20mm/15mm to
-        # give the gear more travel to actually bite - re-tune on your own
-        # printer if this still isn't enough (or is more than you need).
-        self.prime_e1 = config.getfloat("prime_e1", 20.0)
-        self.prime_e2 = config.getfloat("prime_e2", 15.0)
+        # EXTRUDE stage 5->6->7 handoff tuning - see _extrude_material_handoff()
+        # below for the full sequence this drives. UPDATED 2026-08-17: an
+        # earlier version of this file just raised the toolhead priming
+        # distances (prime_e1/e2, 10mm/5mm -> 20mm/15mm) after live testing
+        # showed filament reaching the toolhead sensor but the extruder gear
+        # never actually grabbing it - that was a reasonable guess at the
+        # time, but decompiling the real firmware's extrude_material()
+        # function (previously a decompyle3 parse failure, only readable via
+        # raw bytecode disassembly - see FINDINGS.md) revealed the ACTUAL
+        # missing piece is architectural, not distance: the real firmware
+        # runs a bounded RETRY LOOP here, verified against the box's own
+        # measuring-wheel/odometer reading (not just a toolhead sensor
+        # check) after each attempt, using a short but FAST push
+        # (default 9mm at F12000 - 200mm/s, not our old slow F35/F10) -
+        # repeated up to extrude_material_times times, with a toolhead+box
+        # retreat-and-retry recovery step if a given attempt's stage 7
+        # doesn't come back OK. prime_e1/prime_e2 (the fixed 10mm/5mm moves
+        # immediately around stage 6 and inside the retry loop's stage 7
+        # branch) turned out to be correct in the real firmware after all -
+        # reverted to their original values here now that the real
+        # bottleneck is understood to be architecture, not raw distance.
+        self.prime_e1 = config.getfloat("prime_e1", 10.0)
+        self.prime_e2 = config.getfloat("prime_e2", 5.0)
+        self.extrude_material_len_for_extruder = config.getfloat(
+            "extrude_material_len_for_extruder", 9.0, minval=0.0, maxval=60.0)
+        self.extrude_material_times = config.getint("extrude_material_times", 6, minval=1)
 
         # Name of the real toolhead filament sensor (a plain Klipper
         # [filament_switch_sensor], NOT one of this extra's own virtual
@@ -379,6 +410,110 @@ class CrealityCFS:
         except Exception:
             logging.exception("creality_cfs: pre-loading reset failed (non-fatal)")
 
+    def _get_measuring_wheel(self):
+        """Read the box's measuring-wheel/odometer distance (fn 0x0E,
+        data=[0x01] = the real firmware's "GET" action byte - confirmed
+        2026-08-17 from decompiled reference, see FINDINGS.md). Returns
+        None if the box didn't reply with a valid 4-byte reading - callers
+        must handle that (treat as "can't verify", not "definitely 0")."""
+        resp = self._send(self.box_addr, 0xFF, FN["GET_MEASURING_WHEEL"], bytes([0x01]))
+        if len(resp) >= 9:
+            return decode_measuring_wheel(resp[5:9])
+        return None
+
+    def _get_buffer_state(self):
+        """Returns the raw buffer_state byte (0=middle, 1=full, 2=empty -
+        see docs/PROTOCOL.md), or None if no valid reply."""
+        resp = self._send(self.box_addr, 0xFF, FN["GET_BUFFER_STATE"])
+        if len(resp) >= 6:
+            return resp[5]
+        return None
+
+    def _extrude_material_handoff(self, gcmd, slot):
+        """The real firmware's stage 6->7 handoff, ported 2026-08-17 from
+        decompiled reference (extrude_material(), previously unreadable
+        via decompyle3 - only recovered via raw bytecode disassembly, see
+        FINDINGS.md). This is the moment the box has pushed filament up to
+        the toolhead sensor and the toolhead extruder needs to actually
+        grab it and pull the rest of the way, while the box keeps feeding
+        - our earlier single-shot version (one slow toolhead move, trust
+        the sensor) was missing this whole retry+verify structure.
+
+        Sequence: a fixed priming move + stage 6, then up to
+        extrude_material_times attempts of a short fast push
+        (extrude_material_len_for_extruder mm at F12000), each verified
+        against the ACTUAL distance the box's measuring wheel reports
+        moving (not just "does the sensor still see filament") - stopping
+        as soon as the buffer isn't full or the wheel confirms enough
+        distance. Each attempt that doesn't look successful also tries
+        stage 7 and, if that comes back bad, does a toolhead+box retreat
+        before the next attempt.
+
+        Returns True if the handoff looks like it succeeded, False
+        otherwise (caller should treat False as "check physically", not
+        as a hard failure - this is a faithful port of decompiled logic,
+        not independently verified byte-for-byte against live hardware
+        yet)."""
+        self.gcode.run_script_from_command("M83")
+        self.gcode.run_script_from_command("G0 E%.2f F35" % self.prime_e1)
+        self._pause(0.3)
+        resp6 = self._send(self.box_addr, 0xFF, FN["EXTRUDE_PROCESS"], bytes([slot, 0x06, 0x00]))
+        status6 = resp6[3] if len(resp6) >= 4 else None
+        if status6 != 0x00:
+            gcmd.respond_info("CFS_EXTRUDE: stage 6 status=%s (continuing - real "
+                               "firmware doesn't hard-stop here either)" %
+                               (hex(status6) if status6 is not None else "no reply"))
+
+        initial_distance = self._get_measuring_wheel()
+        retry_count = 0
+        for attempt in range(self.extrude_material_times):
+            self.gcode.run_script_from_command("M83")
+            self.gcode.run_script_from_command(
+                "G0 E%.2f F12000" % self.extrude_material_len_for_extruder)
+            self.gcode.run_script_from_command("M400")
+
+            buffer_state = self._get_buffer_state()
+            new_distance = self._get_measuring_wheel()
+            diff_length = None
+            if initial_distance is not None and new_distance is not None:
+                diff_length = new_distance - initial_distance
+            gcmd.respond_info(
+                "CFS_EXTRUDE: handoff attempt %d/%d - buffer_state=%s, "
+                "measuring-wheel diff=%s" % (
+                    attempt + 1, self.extrude_material_times, buffer_state,
+                    ("%.2fmm" % diff_length) if diff_length is not None else "unknown"))
+
+            if buffer_state != 1 and (
+                    diff_length is None or diff_length >= self.extrude_material_len_for_extruder):
+                return True
+
+            self._send(self.box_addr, 0xFF, FN["SET_BOX_MODE"], bytes([0x00, 0x01]))
+            self.gcode.run_script_from_command("M83")
+            self.gcode.run_script_from_command("G0 E%.2f F10" % self.prime_e2)
+            resp7 = self._send(self.box_addr, 0xFF, FN["EXTRUDE_PROCESS"], bytes([slot, 0x07, 0x02]))
+            status7 = resp7[3] if len(resp7) >= 4 else None
+            if status7 != 0x00:
+                retry_count += 1
+                if retry_count > 3:
+                    gcmd.respond_info("CFS_EXTRUDE: handoff giving up - "
+                                       "%d stage-7 failures" % retry_count)
+                    return False
+                # Recovery: check in with a generic retrude, then retreat
+                # both the toolhead and the box before the next attempt -
+                # matches the real firmware's own fallback here.
+                recover = self._send(self.box_addr, 0xFF, FN["RETRUDE_PROCESS"],
+                                      bytes([0x00, 0x00]))
+                recover_status = recover[3] if len(recover) >= 4 else None
+                if recover_status in (0x00, 0x12):
+                    self.gcode.run_script_from_command("M83")
+                    self.gcode.run_script_from_command("G0 E-10 F180")
+                    self.gcode.run_script_from_command("M400")
+                    self._send(self.box_addr, 0xFF, FN["MOVE_DISTANCE"], bytes([0x01, 50]))
+
+        gcmd.respond_info("CFS_EXTRUDE: handoff did not confirm success after "
+                           "%d attempts - check physically" % self.extrude_material_times)
+        return False
+
     def cmd_CFS_SET_PRE_LOADING(self, gcmd):
         action = gcmd.get("ACTION", "CLOSE").upper()
         action_map = {"CLOSE": 0x00, "OPEN": 0x01, "RUN": 0x02, "TIGHT": 0x03}
@@ -500,8 +635,19 @@ class CrealityCFS:
             slot_letter, "confirmed clear" if ok else "did NOT confirm clear - check physically"))
 
     def cmd_CFS_EXTRUDE(self, gcmd):
-        # UNTESTED CHANGE (not yet run live - see FINDINGS.md in the private
-        # research log for the full story): after exhausting live guessing
+        # STATUS 2026-08-16/17: slot switching itself is confirmed working
+        # live on all 4 slots via this command. What ISN'T yet confirmed
+        # live is the stage 6/7 handoff rewrite in
+        # _extrude_material_handoff() (2026-08-17, see its own docstring
+        # and FINDINGS.md) - a faithful port of the real firmware's
+        # retry+measuring-wheel-verified logic, replacing an earlier
+        # single-shot version that reliably got filament to the toolhead
+        # sensor but not reliably past the extruder gear and out the
+        # nozzle. Test that specifically before trusting this for real
+        # prints - see docs/TOOLCHANGE_TEST_PLAN.md.
+        #
+        # Below: history of how slot-switching itself got fixed (not yet
+        # updated since it happened - after exhausting live guessing
         # (7 failed attempts at slots other than A, always the same
         # EXTRUDE_ERR8/FR2832 failure), we downloaded Creality's real
         # official K1C firmware for this board variant and decompiled its
@@ -617,25 +763,14 @@ class CrealityCFS:
             self._send(self.box_addr, 0xFF, FN["EXTRUDE_PROCESS"], bytes([slot, 0x05, 0x00]))
             self._pause(0.4)
 
-        # Stages 6/7 + the toolhead-side prime moves between them - see the
-        # header comment above cmd_CFS_EXTRUDE, and the prime_e1/prime_e2
-        # comment in __init__ for why these distances were raised from the
-        # original 10mm/5mm (confirmed live: too short, filament reached
-        # the sensor but the extruder never actually grabbed it - nothing
-        # came out the nozzle).
-        self.gcode.run_script_from_command("M83")
-        self.gcode.run_script_from_command("G0 E%.1f F35" % self.prime_e1)
-        self._pause(0.3)
-        self._send(self.box_addr, 0xFF, FN["EXTRUDE_PROCESS"], bytes([slot, 0x06, 0x00]))
-        self._pause(0.3)
-        self.gcode.run_script_from_command("M83")
-        self.gcode.run_script_from_command("G0 E%.1f F10" % self.prime_e2)
-        self._pause(0.3)
-        # stage 7's real 3rd byte is unconfirmed live - 0x02 is the
-        # decompiled source's special-cased extra byte, used here as a
-        # reasonable guess, not yet verified either way.
-        self._send(self.box_addr, 0xFF, FN["EXTRUDE_PROCESS"], bytes([slot, 0x07, 0x02]))
-        self._pause(0.3)
+        # Stage 6/7 handoff - see _extrude_material_handoff()'s own docstring
+        # for the full story (ported 2026-08-17 from decompiled reference,
+        # replacing an earlier single-shot version that didn't verify
+        # against the measuring wheel and had no retry logic).
+        handoff_ok = self._extrude_material_handoff(gcmd, slot)
+        if not handoff_ok:
+            gcmd.respond_info("CFS_EXTRUDE: handoff did not confirm success - "
+                               "check physically before printing")
         # Mark this specific slot as the active PRINT-mode slot - payload
         # [slot_bitmask, 0x00], NOT the fixed [0x00, mode] pair used for the
         # generic enter-feed-mode / cleanup calls elsewhere in this file.
@@ -651,7 +786,8 @@ class CrealityCFS:
 
         # RESTORE_POSITION equivalent
         self.gcode.run_script_from_command("RESTORE_GCODE_STATE NAME=CFS_EXTRUDE")
-        gcmd.respond_info("CFS_EXTRUDE slot=%s complete (%d polls)" % (slot_letter, polls))
+        gcmd.respond_info("CFS_EXTRUDE slot=%s complete (%d polls, handoff %s)" % (
+            slot_letter, polls, "confirmed" if handoff_ok else "NOT confirmed - check physically"))
 
 
 def load_config(config):
