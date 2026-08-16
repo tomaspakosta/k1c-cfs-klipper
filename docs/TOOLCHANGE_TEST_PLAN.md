@@ -300,22 +300,26 @@ one-off physical snag on this particular attempt, not a new protocol
 issue.
 
 **Update, 2026-08-16: `klipper_extra/creality_cfs.py` installed into a
-real running Klipper for the first time.** `[creality_cfs]` +
-`[save_variables]` added to `printer.cfg` (backed up first),
-`cfs_toolchange.cfg` (from `toolchange_draft.cfg`) included. The extra
-loads cleanly and registers all its commands (`CFS_STATUS`,
-`CFS_RETRUDE`, `CFS_EXTRUDE`, `CFS_TOOLCHANGE`, etc. - confirmed via
-`HELP`), but **hit a real, still-unsolved bug: the box never gets
-marked as addressed inside this extra**, even though it responds
-reliably to the standalone `cfs_cli.py` tool seconds apart on the same
-connection attempt. A `CFS_RECONNECT` command and a 3-attempt retry
-loop (both closing/reopening the serial connection) didn't fix it -
-all attempts failed identically, confirmed in `klippy.log`. Not yet
-root-caused; see `klipper_extra/README.md`'s "Known issue" section and
-`FINDINGS.md` in the private research log for the full diagnostic
-trail. **Practical result: `CFS_TOOLCHANGE` as an actual macro call
-has still never been exercised** - `cfs_cli.py` remains the reliable
-way to drive the box.
+real running Klipper for the first time, and the addressing bug it hit
+is now found and fixed.** `[creality_cfs]` + `[save_variables]` added
+to `printer.cfg` (backed up first), `cfs_toolchange.cfg` (from
+`toolchange_draft.cfg`) included. The extra loads cleanly and registers
+all its commands (`CFS_STATUS`, `CFS_RETRUDE`, `CFS_EXTRUDE`,
+`CFS_TOOLCHANGE`, etc. - confirmed via `HELP`). It initially hit a real
+bug - the box never got marked as addressed inside the extra, even
+though `cfs_cli.py` worked fine seconds apart - but this turned out to
+be nothing to do with Klipper's execution context at all: **the box
+remembers its RS-485 address across power cycles and stops answering
+broadcast discovery once addressed**; `cfs_cli.py status` only ever
+"worked" because it skips discovery and talks straight to the known
+address. Fixed by trying a direct probe at the known address first,
+falling back to broadcast discovery only if that fails - see
+`klipper_extra/README.md`'s "Addressing bug - found and fixed" section
+for the full diagnostic trail. **Confirmed live: `CFS_STATUS` now
+correctly reports material in all 4 slots through the real gcode
+command path**, addressed automatically at `klippy:connect`, no manual
+`CFS_RECONNECT` needed. `CFS_RETRUDE`/`CFS_EXTRUDE`/`CFS_TOOLCHANGE`
+(real motor commands) are the next thing to exercise, supervised.
 
 Along the way, found and fixed a real, general Klipper gotcha that bit
 two of this repo's own macro drafts: **Jinja2 `{# comment #}` syntax

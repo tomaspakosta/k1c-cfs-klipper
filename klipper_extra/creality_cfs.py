@@ -233,14 +233,36 @@ class CrealityCFS:
             self.ser = None
 
     def _discover_and_address(self, attempts=3, retry_pause=1.5):
-        # A single try here was found live to be unreliable - Klipper's
-        # own first attempt at klippy:connect consistently got no reply
-        # even when the box was confirmed healthy and responsive to a
-        # separate, freshly-opened connection moments later (see
-        # FINDINGS.md). Retrying a few times, closing and reopening the
-        # serial connection between attempts (not just resending on the
-        # same one), reduced but did not fully eliminate this - treat it
-        # as a known, still-not-fully-understood rough edge, not solved.
+        # ROOT CAUSE FOUND 2026-08-16 (see FINDINGS.md for the full
+        # diagnostic trail): this box remembers its RS-485 address across
+        # power cycles. Once it has been addressed once, it simply stops
+        # replying to broadcast discovery (CMD_GET_SLAVE_INFO at the
+        # broadcast address) - it's not listening there any more, not a
+        # timing/reactor/environment problem. It answers a direct query at
+        # its already-known address instantly and reliably. This is
+        # exactly why cfs_cli.py's `status` command always worked: it
+        # never does discovery either, it just talks straight to
+        # box_addr=1. This extra's old code insisted on broadcast-first
+        # with no fallback, so it failed every time on an
+        # already-addressed box - confirmed identically whether run
+        # inside Klipper, under klippy-env's own Python standalone, or
+        # under the system Python: the execution context was never the
+        # actual variable.
+        #
+        # Fix: try a cheap direct probe at box_addr first. Only fall back
+        # to full broadcast discovery (for a genuinely fresh/unaddressed
+        # box - e.g. first-ever run, or after replacing the box) if that
+        # direct probe gets no reply.
+        resp = self._send(self.box_addr, 0xFF, FN["CMD_ONLINE_CHECK"])
+        if resp:
+            self.addressed = True
+            logging.info("creality_cfs: box already addressed at %#04x, "
+                         "skipped broadcast discovery (direct probe replied)",
+                         self.box_addr)
+            return
+        logging.info("creality_cfs: no reply from a direct probe at %#04x, "
+                     "falling back to broadcast discovery (box may be "
+                     "genuinely unaddressed)", self.box_addr)
         for attempt in range(1, attempts + 1):
             # debug=True here logs the raw TX/RX bytes at INFO level (always
             # visible in klippy.log, unlike logging.debug which Klipper's

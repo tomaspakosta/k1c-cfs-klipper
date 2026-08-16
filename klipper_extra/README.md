@@ -4,37 +4,46 @@
 a real Klipper extra — gcode commands and a background status poll,
 instead of standalone scripts you run by hand.
 
-**Status: installed and loading cleanly in a real Klipper (2026-08-16),
-but not yet usable end-to-end — see "Known issue" below.** The extra
-itself loads without config errors, registers all its gcode commands
-(confirmed via `HELP`), and the underlying protocol calls are the same
-ones validated live elsewhere in this repo. What doesn't work yet: the
-box never gets marked as addressed inside this extra (see below), so
-`CFS_STATUS`/`CFS_RETRUDE`/`CFS_EXTRUDE` aren't usable as-is. `cfs_cli.py`
-(the standalone tool) remains the reliable way to actually drive the box
-for now.
+**Status: installed and confirmed working in a real Klipper (2026-08-16).**
+The extra loads without config errors, registers all its gcode commands
+(confirmed via `HELP`), and `CFS_STATUS` correctly reports material in
+all 4 slots live through Moonraker. See "Addressing bug - found and
+fixed" below for the one real bug this hit along the way.
 
 It also has a known architectural limitation, documented in the file's own
 header comment: it uses blocking serial calls from gcode command handlers,
 which isn't the ideal way to integrate with Klipper's single-threaded
 reactor. Fine for occasional manual commands; not yet built the "right" way.
 
-## ⚠️ Known issue: box never gets addressed inside this extra
+## Addressing bug - found and fixed (2026-08-16)
 
-Confirmed live: the box responds reliably to `cfs_cli.py status` (a
-fresh connection opened and closed each time) but this extra's own
-discovery attempt at `klippy:connect` - the *exact same wire request* -
-consistently gets no reply, even seconds apart on the same box. Tried
-and didn't fix it: a `CFS_RECONNECT` command that closes/reopens the
-serial connection and retries; a 3-attempt retry loop with a fresh
-connection each try (all 3 attempts failed identically, confirmed in
-`klippy.log`). The box is not the problem - something about this
-extra's execution context (a persistent connection, inside Klipper's
-reactor/greenlet framework) differs from the standalone tool's
-(fresh connection, plain synchronous script) in a way that matters here.
-**Not yet root-caused** - see `FINDINGS.md` in the private research log
-for the full diagnostic trail and what to try next (byte-level TX/RX
-logging inside `_send()` is the leading next step).
+For a while, the box never got marked as addressed inside this extra at
+all - `CFS_STATUS` always said "not addressed", even though `cfs_cli.py
+status` reliably worked seconds apart on the same box. A long diagnostic
+session (byte-level TX/RX logging, testing under klippy-env's own Python
+standalone with Klipper fully stopped, testing the real `cfs_protocol.py`
+code directly) ruled out every "execution context" theory - Klipper's
+reactor, a persistent vs. fresh connection, even the interpreter/venv
+itself all turned out to be red herrings.
+
+**Real cause: this box remembers its RS-485 address across power
+cycles.** Once addressed, it simply stops replying to broadcast discovery
+(`CMD_GET_SLAVE_INFO` at the broadcast address) - confirmed by calling
+`CFSClient.discover()` directly from a plain script and getting no reply
+either. It answers a direct query at its already-known address (`0x01`
+here) instantly. `cfs_cli.py status` always "worked" only because it
+never does discovery in the first place - it just talks straight to the
+known address. This extra's old `_discover_and_address()` insisted on
+broadcast-first with no fallback, so it failed every single time on an
+already-addressed box.
+
+**Fix:** `_discover_and_address()` now tries a cheap direct probe
+(`CMD_ONLINE_CHECK`) at `box_addr` first, and only falls back to full
+broadcast discovery if that gets no reply (a genuinely fresh/unaddressed
+box). Confirmed live: `klippy.log` now shows `box already addressed at
+0x01, skipped broadcast discovery (direct probe replied)`, and
+`CFS_STATUS` correctly reports `material loaded in slots: A, B, C, D`
+through the real gcode command path.
 
 ## Two real Klipper gotchas found installing this, worth knowing regardless of this project
 
@@ -78,10 +87,11 @@ then test read-only first:
 CFS_STATUS
 ```
 
-If it says "not addressed", try `CFS_RECONNECT` - but see the known
-issue above, this currently doesn't reliably help either. Only move on
-to `CFS_RETRUDE SLOT=A` / `CFS_EXTRUDE SLOT=A` once status genuinely
-works and you're watching the printer.
+If it says "not addressed" (e.g. a genuinely first-ever run with a fresh
+box), try `CFS_RECONNECT`, which now falls back to full broadcast
+discovery automatically. Only move on to `CFS_RETRUDE SLOT=A` /
+`CFS_EXTRUDE SLOT=A` once status genuinely works and you're watching the
+printer.
 
 **Switching slots ✅ works** — after a long debugging trail (see
 [`docs/TOOLCHANGE_TEST_PLAN.md`](../docs/TOOLCHANGE_TEST_PLAN.md) phase
