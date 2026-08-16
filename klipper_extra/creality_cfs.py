@@ -10,15 +10,26 @@
 # loaded into a running Klipper and tested. Review it, install it
 # carefully, and test each command individually before relying on it.
 #
-# KNOWN LIMITATION: this uses blocking pyserial calls from gcode command
-# handlers. Klipper's reactor is single-threaded, so a slow/stalled CFS
-# response can briefly stall the whole reactor (MCU keepalive, other
-# gcode processing) for up to the timeout on that call. For a small
-# number of manually-triggered commands this is usually fine in practice,
-# but it's not how a "proper" Klipper extra should be built long-term -
-# see gitstonelabs/creality-cfs-klipper's reactor.register_fd()-based
+# KNOWN LIMITATION: this uses blocking pyserial calls (_send()'s own
+# ser.read() loop) from gcode command handlers. Klipper's reactor is
+# single-threaded, so a slow/stalled CFS response can briefly stall the
+# whole reactor (MCU keepalive, other gcode processing, and critically
+# its own heater PID/watchdog timers) for up to the timeout on that call.
+# This is not theoretical: live 2026-08-16, a CFS_EXTRUDE run's
+# accumulated stall time tripped a false verify_heater "not heating at
+# expected rate" shutdown mid-run (see FINDINGS.md). The plain
+# time.sleep() calls that made up part of that stall are fixed - they now
+# use self._pause() (reactor.pause(), cooperative) instead - but the
+# repeated blocking ser.read() calls inside _send() itself, especially the
+# ~20x poll loop in cmd_CFS_EXTRUDE, remain a real, NOT-yet-fixed source
+# of the same class of stall. For a small number of manually-triggered
+# commands this is usually fine in practice, but it's not how a "proper"
+# Klipper extra should be built long-term - see
+# gitstonelabs/creality-cfs-klipper's reactor.register_fd()-based
 # non-blocking approach (referenced in this repo's README credits) for
-# how to do this right. Fixing this is on the roadmap, not done yet.
+# how to do this right. Fixing the serial I/O itself is on the roadmap,
+# not done yet - if you hit another heater_fault/reactor-stall-shaped
+# problem, this is where to look next.
 #
 # Installation: copy this file into klipper/klippy/extras/creality_cfs.py
 # on the printer, add a [creality_cfs] section to printer.cfg (see example
@@ -30,12 +41,15 @@
 #   serial: /dev/ttyUSB0
 #   baud: 230400
 #   box_addr: 1
-#   # optional, see the CFS_EXTRUDE "go to extrude position" note further
-#   # down - defaults below are from a factory box.cfg on the same board
-#   # variant, override if yours differ:
-#   extrude_pos_x: 148.0
-#   extrude_pos_y: 225.3
-#   extrude_pos_z: 30.0
+#   # REQUIRED before CFS_EXTRUDE will run at all - no default is shipped
+#   # any more (see the safety incident note by extrude_pos_x/y/z further
+#   # down). Calibrate these live on YOUR printer first: home, then jog
+#   # there in small steps from the console, watching closely the whole
+#   # time, well clear of anything (cameras, frame, wiring) before you
+#   # trust CFS_EXTRUDE to drive there on its own:
+#   extrude_pos_x: <calibrate this - see docs/MANUAL.md>
+#   extrude_pos_y: <calibrate this - see docs/MANUAL.md>
+#   extrude_pos_z: <calibrate this - see docs/MANUAL.md>
 #   # optional, name of your real toolhead [filament_switch_sensor],
 #   # used by CFS_RETRUDE's tip-form unload sequence:
 #   toolhead_sensor_name: filament_sensor_2
@@ -128,21 +142,32 @@ class CrealityCFS:
         self.box_addr = config.getint("box_addr", 1)
         self.poll_interval = config.getfloat("poll_interval", 5.0, above=0.0)
 
-        # "Go to extrude position" before EXTRUDE_PROCESS - a step our own
-        # testing NEVER did, taken from a real factory box.cfg found on the
-        # same board variant (CR4CU220812S12) restored from /rom on a
-        # different K1C. That printer's official box.py sequence is
-        # BOX_ERROR_CLEAR -> ... -> BOX_GO_TO_EXTRUDE_POS -> BOX_NOZZLE_CLEAN
-        # -> BOX_EXTRUDE_MATERIAL -> BOX_EXTRUDER_EXTRUDE -> ... and worked
-        # on all 4 slots there (until a later, still-unexplained regression
-        # to slot-A-only - see the project memory / FINDINGS.md). We have
-        # NEVER tested this position move ourselves - defaults below are
-        # copied verbatim from that factory box.cfg, override in printer.cfg
-        # if your machine's coordinates differ.
-        self.extrude_pos_x = config.getfloat("extrude_pos_x", 148.0)
-        self.extrude_pos_y = config.getfloat("extrude_pos_y", 225.3)
-        self.extrude_pos_z = config.getfloat("extrude_pos_z", 30.0)
-        self.extrude_move_speed = config.getfloat("extrude_move_speed", 3600.0, above=0.0)
+        # "Go to extrude position" before EXTRUDE_PROCESS.
+        #
+        # SAFETY INCIDENT 2026-08-16: this used to default to X148/Y225.3/
+        # Z30, copied verbatim (never physically tested by us) from a
+        # factory box.cfg found on a different K1C. Live on THIS printer,
+        # that move crashed the toolhead into the frame/enclosure near
+        # where an overhead camera is mounted - the user had to hit
+        # emergency stop. No injury/damage beyond a startled camera mount,
+        # but this is a real collision hazard, not a theoretical one.
+        # There is now NO default - you must explicitly set all three of
+        # extrude_pos_x/y/z in printer.cfg yourself, calibrated live on
+        # YOUR printer the same careful way the cut and purge positions
+        # were calibrated (small G1 jogs from the console, watching the
+        # whole time, well before trusting a macro to do it automatically -
+        # see docs/MANUAL.md). cmd_CFS_EXTRUDE refuses to run at all until
+        # these are set. The move itself is also now split into separate
+        # Z-then-XY-then-Z legs (see below) instead of one diagonal G1, so
+        # a wrong number is less likely to carve a shortcut through
+        # something solid - but that is not a substitute for calibrating
+        # real numbers for your machine.
+        self.extrude_pos_x = config.getfloat("extrude_pos_x", None)
+        self.extrude_pos_y = config.getfloat("extrude_pos_y", None)
+        self.extrude_pos_z = config.getfloat("extrude_pos_z", None)
+        # Slower default than before (was 3600) - a wrong/uncalibrated
+        # position is easier to e-stop in time at a lower speed.
+        self.extrude_move_speed = config.getfloat("extrude_move_speed", 1500.0, above=0.0)
 
         # Name of the real toolhead filament sensor (a plain Klipper
         # [filament_switch_sensor], NOT one of this extra's own virtual
@@ -194,6 +219,22 @@ class CrealityCFS:
     def _open(self):
         if self.ser is None:
             self.ser = serial.Serial(self.serial_path, baudrate=self.baud, timeout=1.0)
+
+    def _pause(self, seconds):
+        """Cooperative wait - use instead of a raw time.sleep() anywhere in
+        this file. A plain time.sleep() hard-blocks Klipper's whole
+        single-threaded reactor, including its own heater PID/watchdog
+        timers; reactor.pause() yields to the reactor while waiting, so
+        those keep running normally. Found live 2026-08-16 (see
+        FINDINGS.md): a CFS_EXTRUDE run's accumulated time.sleep() calls
+        stalled the reactor long enough that verify_heater's watchdog
+        missed its update window and tripped a false "Heater extruder not
+        heating at expected rate" shutdown, even though the hotend itself
+        was fine. This fixes the sleep-based part of that; the blocking
+        pyserial reads inside _send() are a separate, deeper source of the
+        same class of stall that this does NOT fix - see the file header's
+        KNOWN LIMITATION and _send()'s own comment."""
+        self.reactor.pause(self.reactor.monotonic() + seconds)
 
     def _send(self, slave_addr, status, function_code, data=b"", timeout=2.0, debug=False):
         self._open()
@@ -294,7 +335,7 @@ class CrealityCFS:
                     except Exception:
                         pass
                     self.ser = None
-                time.sleep(retry_pause)
+                self._pause(retry_pause)
 
     def _poll_timer(self, eventtime):
         if self.addressed:
@@ -435,9 +476,9 @@ class CrealityCFS:
 
         self._reset_pre_loading()
         self._send(self.box_addr, 0xFF, FN["SET_BOX_MODE"], bytes([0x00, 0x01]))
-        time.sleep(0.3)
+        self._pause(0.3)
         self._send(self.box_addr, 0xFF, FN["RETRUDE_PROCESS"], bytes([slot, 0x00]))
-        time.sleep(0.5)
+        self._pause(0.5)
         self._send(self.box_addr, 0xFF, FN["RETRUDE_PROCESS"], bytes([slot, 0x01]))
 
         ok = self._retrude_with_tip_form(gcmd)
@@ -494,6 +535,15 @@ class CrealityCFS:
         if not all(axis in homed for axis in "xyz"):
             raise gcmd.error("CFS_EXTRUDE: home the printer first (G28) - "
                               "refusing to move to the extrude position unhomed")
+        if None in (self.extrude_pos_x, self.extrude_pos_y, self.extrude_pos_z):
+            raise gcmd.error(
+                "CFS_EXTRUDE: extrude_pos_x/y/z are not set in [creality_cfs] - "
+                "refusing to guess. A previous default here crashed a real "
+                "toolhead into the printer frame (2026-08-16 safety incident, "
+                "see this file's header comment). Calibrate a safe position by "
+                "jogging there manually and watching closely first, the same "
+                "way the cut/purge positions were calibrated - see "
+                "docs/MANUAL.md - then set all three in printer.cfg.")
 
         self._reset_pre_loading()
 
@@ -502,20 +552,37 @@ class CrealityCFS:
         if status:
             gcmd.respond_info("CFS_EXTRUDE: pre-run GET_BOX_STATE=%s" % status.hex())
         self._send(self.box_addr, 0xFF, FN["SET_BOX_MODE"], bytes([0x00, 0x01]))
-        time.sleep(0.3)
+        self._pause(0.3)
 
-        # Step 2: BOX_GO_TO_EXTRUDE_POS equivalent - untested, see note above
+        # Step 2: BOX_GO_TO_EXTRUDE_POS equivalent.
+        #
+        # Split into three separate legs (Z, then XY, then Z) instead of
+        # one diagonal G1 that moves all three axes at once - added after
+        # the 2026-08-16 frame collision (see the safety incident note by
+        # extrude_pos_x/y/z above). A single diagonal move's exact path
+        # depends on wherever the toolhead happened to be beforehand, which
+        # made it easy to accidentally sweep through solid stuff. This
+        # doesn't make an uncalibrated position safe - it only avoids
+        # *extra*, unpredictable diagonal shortcuts on top of whatever
+        # calibrated position you've set. Whichever Z the toolhead is
+        # already at when this leg 1 move starts is used as the travel
+        # height for the XY leg - if that's not clear of obstacles on your
+        # printer, raise Z manually to a known-clear height before calling
+        # CFS_EXTRUDE.
         self.gcode.run_script_from_command("SAVE_GCODE_STATE NAME=CFS_EXTRUDE")
+        self.gcode.run_script_from_command("G90")
         self.gcode.run_script_from_command(
-            "G90\nG1 X%.2f Y%.2f Z%.2f F%.0f" % (
-                self.extrude_pos_x, self.extrude_pos_y, self.extrude_pos_z,
-                self.extrude_move_speed))
+            "G1 Z%.2f F%.0f" % (self.extrude_pos_z, self.extrude_move_speed))
+        self.gcode.run_script_from_command("M400")
+        self.gcode.run_script_from_command(
+            "G1 X%.2f Y%.2f F%.0f" % (
+                self.extrude_pos_x, self.extrude_pos_y, self.extrude_move_speed))
         self.gcode.run_script_from_command("M400")
 
         self._send(self.box_addr, 0xFF, FN["CTRL_CONNECTION_MOTOR_ACTION"], bytes([0x01]))
-        time.sleep(0.5)
+        self._pause(0.5)
         self._send(self.box_addr, 0xFF, FN["TIGHTEN_UP_ENABLE"], bytes([0x01]))
-        time.sleep(0.3)
+        self._pause(0.3)
 
         # EXTRUDE_PROCESS payload is [slot, stage, amount] - 3 bytes,
         # amount usually 0x00. We briefly tried a 2-byte [slot, stage] form
@@ -528,29 +595,29 @@ class CrealityCFS:
         # disagree - this box's own onboard firmware apparently doesn't
         # match whatever transport framing the host-side code assumes.
         self._send(self.box_addr, 0xFF, FN["EXTRUDE_PROCESS"], bytes([slot, 0x00, 0x00]))
-        time.sleep(0.3)
+        self._pause(0.3)
         self._send(self.box_addr, 0xFF, FN["EXTRUDE_PROCESS"], bytes([slot, 0x04, 0x00]))
-        time.sleep(0.3)
+        self._pause(0.3)
 
         for _ in range(polls):
             self._send(self.box_addr, 0xFF, FN["EXTRUDE_PROCESS"], bytes([slot, 0x05, 0x00]))
-            time.sleep(0.4)
+            self._pause(0.4)
 
         # Stages 6/7 + the toolhead-side prime moves between them - see the
         # header comment above cmd_CFS_EXTRUDE. UNTESTED.
         self.gcode.run_script_from_command("M83")
         self.gcode.run_script_from_command("G0 E10 F35")
-        time.sleep(0.3)
+        self._pause(0.3)
         self._send(self.box_addr, 0xFF, FN["EXTRUDE_PROCESS"], bytes([slot, 0x06, 0x00]))
-        time.sleep(0.3)
+        self._pause(0.3)
         self.gcode.run_script_from_command("M83")
         self.gcode.run_script_from_command("G0 E5 F10")
-        time.sleep(0.3)
+        self._pause(0.3)
         # stage 7's real 3rd byte is unconfirmed live - 0x02 is the
         # decompiled source's special-cased extra byte, used here as a
         # reasonable guess, not yet verified either way.
         self._send(self.box_addr, 0xFF, FN["EXTRUDE_PROCESS"], bytes([slot, 0x07, 0x02]))
-        time.sleep(0.3)
+        self._pause(0.3)
         # Mark this specific slot as the active PRINT-mode slot - payload
         # [slot_bitmask, 0x00], NOT the fixed [0x00, mode] pair used for the
         # generic enter-feed-mode / cleanup calls elsewhere in this file.

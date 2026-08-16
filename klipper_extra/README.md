@@ -93,22 +93,39 @@ discovery automatically. Only move on to `CFS_RETRUDE SLOT=A` /
 `CFS_EXTRUDE SLOT=A` once status genuinely works and you're watching the
 printer.
 
-**Switching slots ✅ works** — after a long debugging trail (see
-[`docs/TOOLCHANGE_TEST_PLAN.md`](../docs/TOOLCHANGE_TEST_PLAN.md) phase
-2), the fix turned out to be completing `EXTRUDE_PROCESS`'s full
-sequence (stages 6/7 plus toolhead-side prime moves between them) and
-marking the loaded slot via `SET_BOX_MODE`'s per-slot form at the end -
-confirmed live, switching to a slot other than A for the first time all
-project long. **Caveat: that confirmation was via `cfs_cli.py`
-(standalone), not this Klipper extra itself** - the extra's
-`cmd_CFS_EXTRUDE` was updated to match the same sequence but hasn't
-been loaded into a running Klipper and exercised yet; treat it as
-"should work, not yet independently verified as a Klipper extra." If
-your printer's real extrude position differs from the factory default
-used for the toolhead "go to extrude position" move (`X148 Y225.3
-Z30`), set `extrude_pos_x` / `extrude_pos_y` / `extrude_pos_z` in
-`[creality_cfs]`. `BOX_NOZZLE_CLEAN` and stage 7's exact 3rd payload
-byte remain unconfirmed guesses, but didn't block the live result.
+**`CFS_RETRUDE` ✅ confirmed working as a real Klipper extra command**
+(2026-08-16) - full tip-form unload sequence, ended with "toolhead sensor
+clear, unload complete" and "confirmed clear", no manual assist needed.
+
+**`CFS_EXTRUDE` hit two real problems live and is not yet a clean pass:**
+
+1. **A reactor-stall heater fault.** This extra's accumulated
+   `time.sleep()` calls (see KNOWN LIMITATION at the top of the file)
+   stalled Klipper's reactor long enough that `verify_heater` missed its
+   update window and tripped a false "not heating at expected rate"
+   shutdown mid-run. Fixed: every `time.sleep()` in this file is now
+   `self._pause()` (`reactor.pause()`, cooperative). **Not fully fixed**:
+   `_send()`'s own blocking `ser.read()` calls (especially the ~20x poll
+   loop) are a real, deeper source of the same class of stall and can
+   still cause problems - see the file's KNOWN LIMITATION comment.
+2. **A real physical collision.** The "go to extrude position" move used
+   to default to `X148 Y225.3 Z30`, copied verbatim (never physically
+   tested by us) from a factory `box.cfg` found on a different K1C. Live
+   on this printer, that move crashed the toolhead into the frame near an
+   overhead camera mount - the user had to hit emergency stop.
+   **`extrude_pos_x`/`extrude_pos_y`/`extrude_pos_z` now have no default
+   at all** - `CFS_EXTRUDE` refuses to run until you set all three
+   yourself in `[creality_cfs]`, calibrated live on your own printer the
+   same careful way the cut/purge positions were (small jogs from the
+   console, watching closely, well clear of anything - see
+   `docs/MANUAL.md`). The move itself is also now split into separate
+   Z-then-XY-then-Z legs instead of one diagonal `G1`, so a wrong number
+   is less likely to carve an unexpected shortcut through something solid
+   - that's not a substitute for calibrating real numbers for your
+   machine, just a smaller blast radius if you haven't yet.
+
+`BOX_NOZZLE_CLEAN` and stage 7's exact 3rd payload byte remain
+unconfirmed guesses.
 
 ## Fluidd / Mainsail display
 
