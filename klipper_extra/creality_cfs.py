@@ -195,10 +195,12 @@ class CrealityCFS:
         if self.ser is None:
             self.ser = serial.Serial(self.serial_path, baudrate=self.baud, timeout=1.0)
 
-    def _send(self, slave_addr, status, function_code, data=b"", timeout=2.0):
+    def _send(self, slave_addr, status, function_code, data=b"", timeout=2.0, debug=False):
         self._open()
         frame = build_frame(slave_addr, status, function_code, data)
         self.ser.reset_input_buffer()
+        if debug:
+            logging.info("creality_cfs: TX %s", frame.hex())
         self.ser.write(frame)
         self.ser.flush()
         deadline = time.time() + timeout
@@ -208,6 +210,8 @@ class CrealityCFS:
             if chunk:
                 total += chunk
                 deadline = time.time() + 0.3
+        if debug:
+            logging.info("creality_cfs: RX %s", total.hex() if total else "(nothing)")
         return total
 
     # -- lifecycle --------------------------------------------------------
@@ -238,8 +242,18 @@ class CrealityCFS:
         # same one), reduced but did not fully eliminate this - treat it
         # as a known, still-not-fully-understood rough edge, not solved.
         for attempt in range(1, attempts + 1):
+            # debug=True here logs the raw TX/RX bytes at INFO level (always
+            # visible in klippy.log, unlike logging.debug which Klipper's
+            # default log setup may filter out) - added specifically to
+            # diagnose the still-open addressing bug documented above: is
+            # the write actually reaching the box, or is the read side
+            # never getting a reply that's really there? Next physical
+            # session, trigger CFS_RECONNECT (or a restart) and grep
+            # klippy.log for "creality_cfs: TX"/"creality_cfs: RX" to see
+            # exactly what went out and what (if anything) came back.
             resp = self._send(BROADCAST_ALL_BOXES, 0x00, FN["CMD_GET_SLAVE_INFO"],
-                               bytes([BROADCAST_ALL_BOXES, BROADCAST_ALL_BOXES]))
+                               bytes([BROADCAST_ALL_BOXES, BROADCAST_ALL_BOXES]),
+                               debug=True)
             if len(resp) >= 20:
                 uid = resp[7:19]
                 self._send(BROADCAST_ALL_BOXES, 0x00, FN["CMD_SET_SLAVE_ADDR"],
