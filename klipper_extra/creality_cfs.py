@@ -169,6 +169,20 @@ class CrealityCFS:
         # position is easier to e-stop in time at a lower speed.
         self.extrude_move_speed = config.getfloat("extrude_move_speed", 1500.0, above=0.0)
 
+        # Toolhead-side "priming" moves between EXTRUDE_PROCESS stages
+        # 5->6->7 (see cmd_CFS_EXTRUDE below) - this is the handoff moment
+        # where the toolhead extruder is meant to grab filament the box
+        # has pushed up to the sensor and start pulling it the rest of the
+        # way, while the box keeps feeding. UPDATED 2026-08-16: the
+        # original 10mm/5mm distances (from decompiled reference code)
+        # were live-confirmed insufficient on our unit - filament reached
+        # the sensor but the extruder gear never actually got a grip on it
+        # (nothing came out the nozzle). Raised defaults to 20mm/15mm to
+        # give the gear more travel to actually bite - re-tune on your own
+        # printer if this still isn't enough (or is more than you need).
+        self.prime_e1 = config.getfloat("prime_e1", 20.0)
+        self.prime_e2 = config.getfloat("prime_e2", 15.0)
+
         # Name of the real toolhead filament sensor (a plain Klipper
         # [filament_switch_sensor], NOT one of this extra's own virtual
         # CFS_A..CFS_D sensors) - used by the tip-form unload sequence in
@@ -604,14 +618,18 @@ class CrealityCFS:
             self._pause(0.4)
 
         # Stages 6/7 + the toolhead-side prime moves between them - see the
-        # header comment above cmd_CFS_EXTRUDE. UNTESTED.
+        # header comment above cmd_CFS_EXTRUDE, and the prime_e1/prime_e2
+        # comment in __init__ for why these distances were raised from the
+        # original 10mm/5mm (confirmed live: too short, filament reached
+        # the sensor but the extruder never actually grabbed it - nothing
+        # came out the nozzle).
         self.gcode.run_script_from_command("M83")
-        self.gcode.run_script_from_command("G0 E10 F35")
+        self.gcode.run_script_from_command("G0 E%.1f F35" % self.prime_e1)
         self._pause(0.3)
         self._send(self.box_addr, 0xFF, FN["EXTRUDE_PROCESS"], bytes([slot, 0x06, 0x00]))
         self._pause(0.3)
         self.gcode.run_script_from_command("M83")
-        self.gcode.run_script_from_command("G0 E5 F10")
+        self.gcode.run_script_from_command("G0 E%.1f F10" % self.prime_e2)
         self._pause(0.3)
         # stage 7's real 3rd byte is unconfirmed live - 0x02 is the
         # decompiled source's special-cased extra byte, used here as a
