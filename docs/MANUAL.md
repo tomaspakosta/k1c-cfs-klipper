@@ -169,7 +169,21 @@ drive gear** (needs a manual lever release, box reports
 fed in deep by a completed `EXTRUDE`. `CFS_RETRUDE`/`cfs_cli.py retrude`
 now run a "tip-forming" unload sequence automatically to avoid this
 (see `docs/PROTOCOL.md`'s "RETRUDE — the tip-forming unload sequence")
-— if you still hit it:
+— **this greatly reduces but does not eliminate the risk**: confirmed
+live 2026-08-16 that slot B (the historically worst-behaved slot) can
+still jam even with cut + tip-form both in place, needing a manual
+lever release mid-`CFS_TOOLCHANGE`. The underlying principle, stated
+plainly: **filament being retruded into the box must either be cleanly
+cut, or have its leading tip safely rounded (tip-formed), before it's
+pulled back** — an un-severed, blobby/snagged tip is what catches in
+the toolhead's own drive gear on the way out. The full intended
+material-change flow is:
+- **Loading fresh material into an empty extruder** (no color change,
+  first load): heat nozzle → extrude into the empty extruder → purge.
+- **Changing color/material with the extruder already loaded**: heat →
+  cut → retrude into the box → purge → resume printing.
+
+If you still hit a jam despite cut + tip-form:
 - **Never pull the filament by hand while a motor might still be
   running** (box or toolhead) — risks stripping the extruder's drive
   gear teeth. Let any in-progress command finish or time out first.
