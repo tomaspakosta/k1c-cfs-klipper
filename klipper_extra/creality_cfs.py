@@ -258,6 +258,14 @@ class CrealityCFS:
                                      "lose a race with the USB device settling - if CFS_STATUS says "
                                      "'not addressed' after startup even though the box is known "
                                      "good, run this instead of a full restart.")
+        gcode.register_command("CFS_SYNC_FEED", self.cmd_CFS_SYNC_FEED,
+                                desc="CFS_SYNC_FEED [DIST=<mm, default 100>] - DIAGNOSTIC, not "
+                                     "part of normal use. Fires a raw box feed-motor move and a "
+                                     "toolhead G1 E move of the same distance as close to "
+                                     "simultaneously as possible, to test whether genuinely "
+                                     "synchronized box+toolhead feeding pushes filament through "
+                                     "where the staged EXTRUDE_PROCESS sequence hasn't. Requires "
+                                     "a hot nozzle and homed axes are not needed.")
 
     # -- low level transport -------------------------------------------
 
@@ -562,6 +570,30 @@ class CrealityCFS:
         else:
             gcmd.respond_info("CFS_RECONNECT: still not addressed - box may not be "
                                "responding right now, check it physically")
+
+    def cmd_CFS_SYNC_FEED(self, gcmd):
+        """DIAGNOSTIC, added 2026-08-17 - not part of the normal
+        CFS_EXTRUDE flow. Live testing found box-side pushes (verified via
+        the measuring wheel) and toolhead-side pulls each individually
+        "work", but filament still doesn't reliably make it out the
+        nozzle - user's hypothesis: the box and toolhead extruder aren't
+        actually moving AT THE SAME TIME, since our stage-based sequence
+        sends a box command, waits for its reply, THEN sends a toolhead
+        move - never truly concurrent. This command fires the box's raw
+        MOVE_DISTANCE (fn 0x31 - a direct feed-motor move, not the full
+        EXTRUDE_PROCESS state machine) with a short timeout (don't block
+        waiting on its reply) immediately followed by a toolhead G1 E move
+        of the same distance, to get them physically overlapping in time
+        as closely as this extra's blocking, single-threaded architecture
+        allows. CFS_SYNC_FEED DIST=<mm, 1-255, default 100>."""
+        dist = gcmd.get_int("DIST", 100, minval=1, maxval=255)
+        self.gcode.run_script_from_command("M83")
+        self._send(self.box_addr, 0xFF, FN["MOVE_DISTANCE"],
+                    bytes([0x00, dist & 0xFF]), timeout=0.3)
+        self.gcode.run_script_from_command("G1 E%d F300" % dist)
+        self.gcode.run_script_from_command("M400")
+        gcmd.respond_info("CFS_SYNC_FEED: sent box MOVE_DISTANCE FORWARD %dmm "
+                           "+ toolhead G1 E%d together - check physically" % (dist, dist))
 
     def _toolhead_filament_detected(self):
         sensor = self.printer.lookup_object(
