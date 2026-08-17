@@ -266,6 +266,11 @@ class CrealityCFS:
                                      "synchronized box+toolhead feeding pushes filament through "
                                      "where the staged EXTRUDE_PROCESS sequence hasn't. Requires "
                                      "a hot nozzle and homed axes are not needed.")
+        gcode.register_command("CFS_BOX_FEED", self.cmd_CFS_BOX_FEED,
+                                desc="CFS_BOX_FEED [DIST=<mm, default 50>] - DIAGNOSTIC, box-only "
+                                     "isolation companion to CFS_SYNC_FEED. Fires just the box's "
+                                     "raw feed-motor move (no toolhead move at all) to check "
+                                     "whether the box pushes cleanly on its own.")
 
     # -- low level transport -------------------------------------------
 
@@ -594,6 +599,21 @@ class CrealityCFS:
         self.gcode.run_script_from_command("M400")
         gcmd.respond_info("CFS_SYNC_FEED: sent box MOVE_DISTANCE FORWARD %dmm "
                            "+ toolhead G1 E%d together - check physically" % (dist, dist))
+
+    def cmd_CFS_BOX_FEED(self, gcmd):
+        """DIAGNOSTIC, added 2026-08-17 - box-only isolation test, no
+        toolhead move at all. Companion to CFS_SYNC_FEED: fires the box's
+        raw MOVE_DISTANCE (fn 0x31, FORWARD) by itself, to check whether
+        the box's own feed motor/rollers push cleanly in isolation (watch
+        physically - does filament actually advance at the box/buffer, or
+        does it slip there too?). CFS_BOX_FEED DIST=<mm, 1-255, default 50>."""
+        dist = gcmd.get_int("DIST", 50, minval=1, maxval=255)
+        resp = self._send(self.box_addr, 0xFF, FN["MOVE_DISTANCE"],
+                           bytes([0x00, dist & 0xFF]), timeout=2.0)
+        status = resp[3] if len(resp) >= 4 else None
+        gcmd.respond_info("CFS_BOX_FEED: box MOVE_DISTANCE FORWARD %dmm, status=%s - "
+                           "check physically at the box/buffer" % (
+                               dist, hex(status) if status is not None else "no reply"))
 
     def _toolhead_filament_detected(self):
         sensor = self.printer.lookup_object(
