@@ -508,7 +508,16 @@ class CrealityCFS:
             self._send(self.box_addr, 0xFF, FN["SET_BOX_MODE"], bytes([0x00, 0x01]))
             self.gcode.run_script_from_command("M83")
             self.gcode.run_script_from_command("G0 E%.2f F10" % self.prime_e2)
-            resp7 = self._send(self.box_addr, 0xFF, FN["EXTRUDE_PROCESS"], bytes([slot, 0x07, 0x02]))
+            # stage 7's 3rd byte: was 0x02 (our own decompiled-source guess,
+            # never independently confirmed) - corrected to 0x03 2026-08-17
+            # after finding github.com/Jacob10383/k2-plus-custom-firmware's
+            # own independent open-source CFS protocol implementation
+            # (different Creality printer, same underlying CFS protocol
+            # family), whose load_stage() uses `argument = 3 if stage == 7
+            # else 0`. Not yet independently live-verified against our own
+            # hardware either way, but a second, publicly-visible source
+            # agreeing is a real signal worth acting on.
+            resp7 = self._send(self.box_addr, 0xFF, FN["EXTRUDE_PROCESS"], bytes([slot, 0x07, 0x03]))
             status7 = resp7[3] if len(resp7) >= 4 else None
             if status7 != 0x00:
                 retry_count += 1

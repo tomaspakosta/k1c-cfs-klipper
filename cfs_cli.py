@@ -264,7 +264,7 @@ def do_extrude(args):
             _moonraker_gcode("M83", args.moonraker_host)
             _moonraker_gcode("G0 E5 F10", args.moonraker_host)
             time.sleep(0.3)
-            ret7 = cfs.extrude_stage(BOX_ADDR, slot, stage=0x07)
+            ret7 = cfs.extrude_stage(BOX_ADDR, slot, stage=0x07, amount=0x03)
             if args.verbose:
                 print(f"  stage 7: {ret7.hex() if ret7 else '(no reply)'}")
             time.sleep(0.3)

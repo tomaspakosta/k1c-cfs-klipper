@@ -311,9 +311,15 @@ class CFSClient:
         RS-485) doesn't necessarily match whatever transport-layer framing
         the decompiled *printer-side* driver code assumes - trust live
         hardware behavior over source code when they disagree. stage=7's
-        real amount byte is unconfirmed; passing 0x02 there (as the
-        decompiled source's special-cased extra byte) is a reasonable
-        guess, not yet verified live either way."""
+        real amount byte: our own decompiled source suggested 0x02
+        (unconfirmed guess); corrected to 0x03 2026-08-17 after finding
+        github.com/Jacob10383/k2-plus-custom-firmware's own independent,
+        public, open-source CFS protocol implementation (different
+        Creality printer, same underlying CFS protocol family), whose
+        load_stage() uses `argument = 3 if stage == 7 else 0`. Callers
+        (cfs_cli.py, creality_cfs.py) now pass 0x03 explicitly - still not
+        independently live-verified against our own hardware either way,
+        but a second public source agreeing is a real signal."""
         return self.send(addr, 0xFF, FN["EXTRUDE_PROCESS"], bytes([slot, stage, amount]))
 
     def retrude_stage(self, addr: int, slot: int, stage: int) -> bytes:
