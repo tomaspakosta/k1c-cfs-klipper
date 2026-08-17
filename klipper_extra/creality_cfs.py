@@ -271,6 +271,11 @@ class CrealityCFS:
                                      "isolation companion to CFS_SYNC_FEED. Fires just the box's "
                                      "raw feed-motor move (no toolhead move at all) to check "
                                      "whether the box pushes cleanly on its own.")
+        gcode.register_command("CFS_SET_PRINT_MODE", self.cmd_CFS_SET_PRINT_MODE,
+                                desc="CFS_SET_PRINT_MODE SLOT=<A|B|C|D> - DIAGNOSTIC. Sets the "
+                                     "box's per-slot PRINT mode early/standalone, to test whether "
+                                     "that's the real 'auto-feed on buffer demand' mode - see this "
+                                     "command's own docstring.")
 
     # -- low level transport -------------------------------------------
 
@@ -628,6 +633,31 @@ class CrealityCFS:
         gcmd.respond_info("CFS_BOX_FEED: sent data=%s, status=%s - "
                            "check physically at the box/buffer" % (
                                data.hex(), hex(status) if status is not None else "no reply"))
+
+    def cmd_CFS_SET_PRINT_MODE(self, gcmd):
+        """DIAGNOSTIC, added 2026-08-17. User's hypothesis: the box's
+        per-slot PRINT mode (SET_BOX_MODE payload [slot_bitmask, 0x00])
+        may be the real "listen to the buffer sensor and auto-feed on
+        demand" mode - the same continuous, reactive feeding the box does
+        during an actual print (buffer slider tension -> box feeds more).
+        Our cmd_CFS_EXTRUDE only sets this at the very END, after the
+        handoff already succeeded or failed - meaning during the actual
+        handoff struggle, the box may still be in a more restrictive
+        loading state, not the auto-feed mode. This command sets PRINT
+        mode for SLOT early/on demand, standalone, so you can then try a
+        plain manual extrude (M83 + G1 E...) afterward and see if the box
+        auto-feeds along with it more naturally. CFS_SET_PRINT_MODE
+        SLOT=<A|B|C|D>."""
+        slot_letter = gcmd.get("SLOT").upper()
+        if slot_letter not in SLOT_BYTES:
+            raise gcmd.error("SLOT must be one of A, B, C, D")
+        slot = SLOT_BYTES[slot_letter]
+        resp = self._send(self.box_addr, 0xFF, FN["SET_BOX_MODE"], bytes([slot, 0x00]))
+        status = resp[3] if len(resp) >= 4 else None
+        gcmd.respond_info("CFS_SET_PRINT_MODE: slot=%s status=%s - now try a plain "
+                           "manual extrude (M83, G1 E...) and watch whether the box "
+                           "auto-feeds along with it" % (
+                               slot_letter, hex(status) if status is not None else "no reply"))
 
     def _toolhead_filament_detected(self):
         sensor = self.printer.lookup_object(
