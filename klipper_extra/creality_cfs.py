@@ -606,14 +606,28 @@ class CrealityCFS:
         raw MOVE_DISTANCE (fn 0x31, FORWARD) by itself, to check whether
         the box's own feed motor/rollers push cleanly in isolation (watch
         physically - does filament actually advance at the box/buffer, or
-        does it slip there too?). CFS_BOX_FEED DIST=<mm, 1-255, default 50>."""
+        does it slip there too?). CFS_BOX_FEED DIST=<mm, 1-255, default 50>
+        [SLOT=<A|B|C|D>] - optional, live-testing whether this command
+        needs a slot byte at all (first live attempt with the 2-byte
+        [direction, distance] payload from decompiled source got
+        PARAMS_ERR - same class of live-vs-decompiled mismatch this repo
+        already hit once for EXTRUDE_PROCESS, which needed an extra byte
+        beyond what the reference code showed. Not yet confirmed which
+        byte order/count is right - this param exists purely to test live)."""
         dist = gcmd.get_int("DIST", 50, minval=1, maxval=255)
-        resp = self._send(self.box_addr, 0xFF, FN["MOVE_DISTANCE"],
-                           bytes([0x00, dist & 0xFF]), timeout=2.0)
+        slot_letter = gcmd.get("SLOT", None)
+        if slot_letter:
+            slot_letter = slot_letter.upper()
+            if slot_letter not in SLOT_BYTES:
+                raise gcmd.error("SLOT must be one of A, B, C, D")
+            data = bytes([SLOT_BYTES[slot_letter], 0x00, dist & 0xFF])
+        else:
+            data = bytes([0x00, dist & 0xFF])
+        resp = self._send(self.box_addr, 0xFF, FN["MOVE_DISTANCE"], data, timeout=2.0)
         status = resp[3] if len(resp) >= 4 else None
-        gcmd.respond_info("CFS_BOX_FEED: box MOVE_DISTANCE FORWARD %dmm, status=%s - "
+        gcmd.respond_info("CFS_BOX_FEED: sent data=%s, status=%s - "
                            "check physically at the box/buffer" % (
-                               dist, hex(status) if status is not None else "no reply"))
+                               data.hex(), hex(status) if status is not None else "no reply"))
 
     def _toolhead_filament_detected(self):
         sensor = self.printer.lookup_object(
