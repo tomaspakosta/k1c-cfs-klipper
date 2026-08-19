@@ -5,7 +5,7 @@
 [![tests](https://github.com/tomaspakosta/k1c-cfs-klipper/actions/workflows/tests.yml/badge.svg)](https://github.com/tomaspakosta/k1c-cfs-klipper/actions/workflows/tests.yml)
 [![License: GPL v3](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
 ![Python](https://img.shields.io/badge/python-3.8%2B-blue)
-![Status](https://img.shields.io/badge/status-hardware--validated-brightgreen)
+![Status](https://img.shields.io/badge/status-concluded%20%E2%80%94%20open%20for%20continuation-lightgrey)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen)](https://github.com/tomaspakosta/k1c-cfs-klipper/issues)
 [![Support](https://img.shields.io/badge/support-PayPal-blue?logo=paypal)](https://paypal.me/pakostatomas)
 
@@ -28,6 +28,7 @@ Discovery · addressing · sensors · RFID · `RETRUDE` · `EXTRUDE`
 [Quick start](#quick-start) ·
 [Full manual](docs/MANUAL.md) ·
 [Status / what's next](#status--whats-next) ·
+[Final update — why this project is concluding](#final-update--why-this-project-is-concluding) ·
 [Credits](#credits) ·
 [Safety](#safety) ·
 [Support](#support)
@@ -318,6 +319,83 @@ setup walkthrough.
 
 Contributions, corrections, and hardware validation on other CFS/board
 revisions are welcome — open an issue.
+
+## Final update — why this project is concluding
+
+**2026-08-19.** This is the last update from me on this repo. Short version:
+the CFS unit has been physically removed from the printer, and I'm stepping
+away from this project. Longer version, so whoever picks this up next
+doesn't have to rediscover it the hard way:
+
+After the protocol client above was validated, I ended up switching
+strategy for a while and running the CFS through Creality's own official,
+closed-source driver instead (via
+[Guilouz's Creality-Helper-Script](https://github.com/Guilouz/Creality-Helper-Script)
+stack, which does support installing the stock `box.py`/`box_wrapper.so`
+package on top of it — that combination itself works and boots fine). The
+reasoning was pragmatic: the official driver is a known quantity, and
+wrapping it with defensive Klipper macros (an automatic load-retry macro,
+and a print-time watchdog that clears+resumes on a false-positive pause)
+seemed like the faster route to something reliable enough to actually print
+with, rather than continuing to validate the open protocol client
+end-to-end myself.
+
+That mostly worked, but not fully — and while chasing down why, the real
+root cause came back into focus. **The mainboard on this printer was
+replaced at one point during this project with another unit of the same
+model (`CR4CU220812S12`).** The exact same mismatch reappeared on the
+replacement board: the system still reports itself internally as an
+`S11`-era build (`hw_version: CR4CU220812S11`) despite genuinely running on
+S12 hardware. That's not a one-off bad board — it's the second board on
+this printer alone showing it, on top of the other owners already reporting
+it independently in the forum threads linked earlier in this README. This
+is a Creality firmware-distribution problem, not a hardware defect in any
+single unit.
+
+I went back to Creality support with this, directly and in detail —
+current firmware/hardware version strings, the exact reproducible error
+codes, everything. The response was the same non-answer as before: no
+direct yes/no on whether S11-branded firmware on an S12 board is officially
+supported, and no confirmation either way of whether a native S12 build
+even exists. Along the way, one new piece of evidence came out of this
+round of testing that's worth recording here even though the CFS unit
+covered by the original tickets is now gone: a reproducible
+`{"code":"key243","msg":"Move out of range"}` error, triggered specifically
+when Klipper's `RESUME` macro tries to restore the toolhead's saved
+position after a CFS-triggered pause — the saved Z target was a physically
+invalid value. That shows the malfunction wasn't confined to the four
+material slots; the pause/resume recovery path around CFS was affected
+too, on top of the load/retrude errors documented elsewhere in this repo.
+
+Between the firmware mismatch Creality won't confirm or fix, and the
+recovery-path bug on top of it, I don't think this is reliably fixable from
+the outside without either a real S12 firmware from Creality or a full
+replacement of the closed-source driver with something equivalent to the
+open protocol client above — which was already most of the way there
+before I switched strategies. **My printer is now back to a stock,
+single-extruder setup, CFS hardware and all CFS-related config physically
+and logically removed.** I'm not actively continuing this.
+
+If you want to pick this up:
+
+- The protocol client itself (`cfs_protocol.py`, `cfs_cli.py`,
+  `examples/`) was independently validated against real hardware and
+  doesn't depend on any of the above being resolved — it's arguably the
+  more promising long-term path exactly *because* it doesn't rely on
+  Creality's closed driver or firmware being fixed. The
+  `klipper_extra/creality_cfs.py` extra and the `macros/*_draft.cfg` files
+  are the natural next step (see [Status / what's next](#status--whats-next)
+  above) — none of that work is invalidated by anything in this update.
+- If your printer reports the same `CR4CU220812S11`/`S12` mismatch, you're
+  not imagining it and you're not alone — it's worth filing your own ticket
+  with Creality regardless, more reports make it harder to wave off with a
+  generic answer.
+- Issues, forks, and PRs are still very welcome — I just won't be the one
+  driving it forward from here. Happy to answer questions if you open an
+  issue, even without actively developing this further.
+
+Thanks to everyone in [Credits](#credits) below whose earlier work made
+getting this far possible.
 
 ## Credits
 
